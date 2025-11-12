@@ -1,0 +1,37 @@
+milvus:
+  host: localhost
+  port: 19530
+  collection_name: benchmark_collection
+  
+  index_params:
+    - index_type: IVF_FLAT
+      metric_type: L2
+      params:
+        nlist: 1024
+    - index_type: HNSW
+      metric_type: L2
+      params:
+        M: 16
+        efConstruction: 200
+  
+  search_params:
+    - metric_type: L2
+      params:
+        nprobe: 10
+    - metric_type: IP
+      params:
+        nprobe: 10
+    - metric_type: COSINE
+      params:
+        nprobe: 10
+
+datasets:
+  small:
+    size: 100000
+    dimension: 128
+  medium:
+    size: 1000000
+    dimension: 384
+  large:
+    size: 10000000
+    dimension: 768

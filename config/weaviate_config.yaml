@@ -1,0 +1,28 @@
+weaviate:
+  host: localhost
+  port: 8080
+  class_name: BenchmarkVector
+  
+  schema:
+    vectorizer: none
+    vectorIndexType: hnsw
+    vectorIndexConfig:
+      ef: 200
+      efConstruction: 128
+      maxConnections: 64
+  
+  distance_metrics:
+    - cosine
+    - l2-squared
+    - dot
+
+datasets:
+  small:
+    size: 100000
+    dimension: 128
+  medium:
+    size: 1000000
+    dimension: 384
+  large:
+    size: 10000000
+    dimension: 768
