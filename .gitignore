@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Datasets (large files)
+data/datasets/
+*.hdf5
+*.fvecs
+*.ivecs
+*.bvecs
+
+# Docker volumes (generated data)
+docker/volumes/
+volumes/
+
+# Results and reports
+results/
+*.csv
+*.png
+*.txt
+report/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Backup files
+*.old
+*.bak
+
+# Large vector files
+Vector-Databases-Comparison/
+
+# Test files
+test_*.py
+main.py
