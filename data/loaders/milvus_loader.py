@@ -86,8 +86,15 @@ class MilvusLoader:
         print(f"  Throughput: {self.metrics['vectors_per_second']:.2f} vectors/s")
         print(f"  Memory used: {self.metrics['memory_used_mb']:.2f} MB")
     
-    def create_index(self, index_type='HNSW', metric_type='L2', index_params=None):
-        """Create index on the collection"""
+    def create_index(self, index_type='HNSW', metric_type='L2', index_params=None, wait_timeout=600):
+        """Create index on the collection and wait for it to complete
+        
+        Args:
+            index_type: Type of index (HNSW, IVF_FLAT, etc.)
+            metric_type: Distance metric (L2, IP)
+            index_params: Index parameters
+            wait_timeout: Max seconds to wait for index to build (default 10 minutes)
+        """
         if index_params is None:
             index_params = {
                 "M": 16,
@@ -101,16 +108,60 @@ class MilvusLoader:
         }
         
         start_time = time.time()
+        print(f"Creating {index_type} index (this may take several minutes for large datasets)...")
         self.collection.create_index(field_name="embedding", index_params=index_config)
-        index_time = time.time() - start_time
         
+        # Wait for index to be fully built
+        print("Waiting for index to finish building...")
+        wait_start = time.time()
+        last_progress = -1
+        
+        while time.time() - wait_start < wait_timeout:
+            # Check index building progress
+            index_info = self.collection.index()
+            index_progress = utility.index_building_progress(self.collection.name)
+            
+            # Progress is a dict with 'total_rows' and 'indexed_rows'
+            total = index_progress.get('total_rows', 0)
+            indexed = index_progress.get('indexed_rows', 0)
+            
+            if total > 0:
+                progress_pct = (indexed / total) * 100
+                if int(progress_pct) != last_progress and int(progress_pct) % 10 == 0:
+                    print(f"  Index progress: {progress_pct:.0f}% ({indexed:,}/{total:,} rows)")
+                    last_progress = int(progress_pct)
+                
+                if indexed >= total:
+                    index_time = time.time() - start_time
+                    self.metrics['index_build_time'] = index_time
+                    print(f"Index built successfully in {index_time:.1f}s")
+                    return
+            
+            time.sleep(2)
+        
+        # If we reach here, timeout occurred
+        index_time = time.time() - start_time
         self.metrics['index_build_time'] = index_time
-        print(f"Index created in {index_time:.2f}s")
+        print(f"WARNING: Index build timed out after {wait_timeout}s, but will try to continue")
+        print(f"  (Index may still be building in background)")
     
-    def load_collection(self):
-        """Load collection into memory"""
+    def load_collection(self, timeout=300):
+        """Load collection into memory and wait for it to be ready"""
+        from pymilvus import utility
+        
         self.collection.load()
-        print("Collection loaded into memory")
+        print("Loading collection into memory...")
+        
+        # Wait for collection to be loaded
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            state = utility.load_state(self.collection.name)
+            if state.name == 'Loaded':
+                print("Collection loaded into memory")
+                return
+            time.sleep(1)
+        
+        raise TimeoutError(f"Collection failed to load within {timeout} seconds")
     
     def get_storage_size(self) -> float:
         """Get storage size in MB"""

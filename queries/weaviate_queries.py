@@ -17,6 +17,7 @@ class WeaviateQueryExecutor:
         self, 
         query_vectors: np.ndarray,
         top_k: int = 10,
+        metric_type: str = 'IP',
         filters: List[Dict] = None
     ) -> Dict:
         """Execute search queries and return metrics"""

@@ -11,7 +11,7 @@ class BenchmarkRunner:
         self.output_dir = output_dir
         self.results = {}
     
-    def run_benchmark(self, db_name: str, executor, queries, test_configs):
+    def run_benchmark(self, db_name: str, executor, queries, test_configs, metric_type='L2'):
         """Run benchmark for a specific database"""
         print(f"\n{'='*60}")
         print(f"Running {db_name} Benchmark")
@@ -26,6 +26,7 @@ class BenchmarkRunner:
             result = executor.search(
                 query_vectors=queries,
                 top_k=config['k'],
+                metric_type=metric_type,
                 filters=config.get('filters')
             )
             

@@ -54,21 +54,37 @@ class ConcurrentTester:
         self,
         search_func: Callable,
         queries: np.ndarray,
-        duration_seconds: int = 60
+        duration_seconds: int = 60,
+        warmup_seconds: int = 2
     ) -> LoadTestResult:
         """Run load test for specified duration"""
         
-        print(f"Starting load test with {self.n_clients} clients for {duration_seconds}s...")
+        print(f"Starting load test with {self.n_clients} clients...")
+        
+        # Warmup phase
+        if warmup_seconds > 0:
+            print(f"  Warming up for {warmup_seconds}s...")
+            try:
+                for _ in range(min(5, len(queries))):
+                    search_func(queries[0])
+            except Exception as e:
+                print(f"  ⚠ Warmup warning: {e}")
         
         stop_event = threading.Event()
         threads = []
         
+        # Clear any old results
+        while not self.results_queue.empty():
+            self.results_queue.get()
+        
         # Start worker threads
+        print(f"  Running test for {duration_seconds}s...")
         start_time = time.time()
         for i in range(self.n_clients):
             t = threading.Thread(
                 target=self.worker,
-                args=(i, search_func, queries, stop_event)
+                args=(i, search_func, queries, stop_event),
+                daemon=True
             )
             t.start()
             threads.append(t)
@@ -86,6 +102,7 @@ class ConcurrentTester:
         # Collect results
         latencies = []
         failures = []
+        failure_messages = []
         
         while not self.results_queue.empty():
             result_type, value = self.results_queue.get()
@@ -93,28 +110,55 @@ class ConcurrentTester:
                 latencies.append(value)
             else:
                 failures.append(value)
+                if len(failure_messages) < 5:  # Keep first 5 error messages
+                    failure_messages.append(value)
         
         latencies = np.array(latencies)
         
-        result = LoadTestResult(
-            total_requests=len(latencies) + len(failures),
-            successful_requests=len(latencies),
-            failed_requests=len(failures),
-            total_time=total_time,
-            qps=len(latencies) / total_time,
-            latencies=latencies.tolist(),
-            p50=np.percentile(latencies, 50),
-            p95=np.percentile(latencies, 95),
-            p99=np.percentile(latencies, 99),
-            mean=np.mean(latencies)
-        )
+        # Handle case where no successful requests were made
+        if len(latencies) == 0:
+            print(f"⚠ WARNING: No successful requests completed!")
+            print(f"  Total failures: {len(failures)}")
+            if failure_messages:
+                print(f"  Sample errors:")
+                for msg in failure_messages:
+                    print(f"    - {msg}")
+            
+            # Return a result with zeros
+            result = LoadTestResult(
+                total_requests=len(failures),
+                successful_requests=0,
+                failed_requests=len(failures),
+                total_time=total_time,
+                qps=0.0,
+                latencies=[],
+                p50=0.0,
+                p95=0.0,
+                p99=0.0,
+                mean=0.0
+            )
+        else:
+            # Normal case with successful requests
+            result = LoadTestResult(
+                total_requests=len(latencies) + len(failures),
+                successful_requests=len(latencies),
+                failed_requests=len(failures),
+                total_time=total_time,
+                qps=len(latencies) / total_time if total_time > 0 else 0,
+                latencies=latencies.tolist(),
+                p50=np.percentile(latencies, 50),
+                p95=np.percentile(latencies, 95),
+                p99=np.percentile(latencies, 99),
+                mean=np.mean(latencies)
+            )
         
         print(f"Load test complete:")
         print(f"  Total requests: {result.total_requests}")
         print(f"  Successful: {result.successful_requests}")
         print(f"  Failed: {result.failed_requests}")
-        print(f"  QPS: {result.qps:.2f}")
-        print(f"  P50 latency: {result.p50*1000:.2f}ms")
-        print(f"  P95 latency: {result.p95*1000:.2f}ms")
+        if result.successful_requests > 0:
+            print(f"  QPS: {result.qps:.2f}")
+            print(f"  P50 latency: {result.p50*1000:.2f}ms")
+            print(f"  P95 latency: {result.p95*1000:.2f}ms")
         
         return result

@@ -1,4 +1,4 @@
-from pymilvus import Collection
+from pymilvus import Collection, utility
 import time
 import numpy as np
 from typing import List, Dict
@@ -8,12 +8,37 @@ class MilvusQueryExecutor:
     
     def __init__(self, collection: Collection):
         self.collection = collection
+        self._ensure_loaded()
+    
+    def _ensure_loaded(self):
+        """Ensure the collection is loaded into memory before querying"""
+        try:
+            state = utility.load_state(self.collection.name)
+            if state.name != 'Loaded':
+                print(f"  Collection not loaded (state={state.name}), loading now...")
+                self.collection.load()
+                # Wait for it to load
+                for _ in range(60):  # Wait up to 60 seconds
+                    state = utility.load_state(self.collection.name)
+                    if state.name == 'Loaded':
+                        print("  Collection loaded successfully")
+                        return
+                    time.sleep(1)
+                raise RuntimeError(f"Collection failed to load, state: {state.name}")
+        except Exception as e:
+            print(f"  Warning: Could not check load state: {e}")
+            # Try loading anyway
+            try:
+                self.collection.load()
+                time.sleep(2)
+            except Exception:
+                pass
     
     def search(
         self, 
         query_vectors: np.ndarray,
         top_k: int = 10,
-        metric_type: str = 'L2',
+        metric_type: str = 'IP',
         search_params: Dict = None,
         filters: List[Dict] = None
     ) -> Dict:
