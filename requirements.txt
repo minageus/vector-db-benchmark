@@ -29,4 +29,4 @@ pytest-cov>=4.1.0
 # pynvml>=11.5.0  # Uncomment if you have NVIDIA GPU
 
 # Optional: Interactive dashboard
-# streamlit>=1.28.0  # Uncomment for dashboard
+streamlit>=1.28.0
