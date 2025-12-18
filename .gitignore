@@ -11,6 +11,11 @@ ENV/
 dist/
 build/
 
+# Environment variables (API keys)
+.env
+.env.local
+.env.*
+
 # Datasets (large files)
 data/datasets/
 *.hdf5

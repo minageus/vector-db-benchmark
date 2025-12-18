@@ -16,7 +16,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pathlib import Path
 import re
+import os
 from datetime import datetime
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Page configuration
 st.set_page_config(
@@ -77,6 +83,69 @@ def get_results_files():
     report_files = sorted(results_dir.glob('complete_benchmark_*.txt'), reverse=True)
     
     return comparison_files, recall_files, report_files
+
+
+def get_ai_recommendations(comparison_df, recall_df, api_key):
+    """
+    Use OpenAI to analyze benchmark data and provide recommendations.
+    
+    Args:
+        comparison_df: DataFrame with query performance metrics
+        recall_df: DataFrame with recall@K accuracy metrics
+        api_key: OpenAI API key
+    
+    Returns:
+        str: AI-generated analysis and recommendations
+    """
+    if not api_key:
+        return None
+    
+    try:
+        client = OpenAI(api_key=api_key)
+        
+        # Prepare data summary for the AI
+        data_summary = "## Benchmark Data Summary\n\n"
+        
+        if comparison_df is not None and not comparison_df.empty:
+            data_summary += "### Query Performance Metrics:\n"
+            data_summary += comparison_df.to_string(index=False)
+            data_summary += "\n\n"
+        
+        if recall_df is not None and not recall_df.empty:
+            data_summary += "### Recall@K Accuracy (Search Quality):\n"
+            data_summary += recall_df.to_string(index=False)
+            data_summary += "\n\n"
+        
+        prompt = f"""
+        You are an expert in vector databases, specifically Milvus and Weaviate.
+        Analyze the following benchmark results comparing these two databases:
+
+        {data_summary}
+        
+        Based on this data, provide:
+        1. A brief analysis of the results (2-3 sentences)
+        2. When to choose Milvus (4-5 bullet points based on the actual data)
+        3. When to choose Weaviate (4-5 bullet points based on the actual data)
+        
+        Format your response in Markdown with clear headers.
+        Be specific and reference actual numbers from the data where relevant.
+        Keep it concise but insightful.
+        """
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a technical expert in vector databases and benchmarking. Provide clear, data-driven recommendations."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=800,
+            temperature=0.7
+        )
+        
+        return response.choices[0].message.content
+    
+    except Exception as e:
+        return f"Error generating AI recommendations: {str(e)}"
 
 
 def extract_timestamp(filename):
@@ -373,14 +442,14 @@ def create_summary_table(benchmarks):
 
 def main():
     # Header
-    st.markdown('<h1 class="main-header">🔍 Milvus vs Weaviate Benchmark</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">Milvus vs Weaviate Benchmark</h1>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">Interactive visualization of vector database performance comparison</p>', unsafe_allow_html=True)
     
     # Get available result files
     comparison_files, recall_files, report_files = get_results_files()
     
     if not report_files:
-        st.error("⚠️ No benchmark results found in the 'results/' directory.")
+        st.error("No benchmark results found in the 'results/' directory.")
         st.info("Run `python run_benchmark.py` to generate benchmark results first.")
         return
     
@@ -414,7 +483,7 @@ def main():
             )
         
         st.divider()
-        st.header("📊 Display Options")
+        st.header("Display Options")
         
         show_loading = st.checkbox("Show Loading Performance", value=True)
         show_latency = st.checkbox("Show Query Latency", value=True)
@@ -426,12 +495,12 @@ def main():
     # MULTI-RUN COMPARISON VIEW
     # =========================================================================
     if view_mode == "Multi-Run Comparison":
-        st.header("📊 Multi-Run Benchmark Comparison")
+        st.header("Multi-Run Benchmark Comparison")
         
-        st.info(f"📁 Loaded **{len(all_benchmarks)}** benchmark runs from `results/` directory")
+        st.info(f"Loaded **{len(all_benchmarks)}** benchmark runs from `results/` directory")
         
         # Summary Table
-        st.subheader("📋 All Benchmark Runs Summary")
+        st.subheader("All Benchmark Runs Summary")
         summary_df = create_summary_table(all_benchmarks)
         st.dataframe(summary_df, use_container_width=True)
         
@@ -445,18 +514,18 @@ def main():
             filtered_benchmarks = all_benchmarks
         
         if show_loading:
-            st.subheader("⏱️ Load Time Across Runs")
+            st.subheader("Load Time Across Runs")
             fig = create_multi_run_comparison(filtered_benchmarks, 'load_time')
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
             
-            st.subheader("💾 Peak Memory Usage Across Runs")
+            st.subheader("Peak Memory Usage Across Runs")
             fig = create_multi_run_comparison(filtered_benchmarks, 'memory')
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
         
         if show_recall:
-            st.subheader("🎯 Recall@K Comparison Across Runs")
+            st.subheader("Recall@K Comparison Across Runs")
             
             # Create recall comparison for all runs
             recall_data = []
@@ -500,7 +569,7 @@ def main():
         selected_bench = all_benchmarks[selected_idx]
         
         # Display benchmark info
-        st.info(f"📊 **Dataset**: {selected_bench['dataset']} | **Vectors**: {selected_bench['vectors']:,} | **Dimensions**: {selected_bench['dimensions']}D | **Raw Size**: {selected_bench.get('raw_data_size', 'N/A')} MB")
+        st.info(f"**Dataset**: {selected_bench['dataset']} | **Vectors**: {selected_bench['vectors']:,} | **Dimensions**: {selected_bench['dimensions']}D | **Raw Size**: {selected_bench.get('raw_data_size', 'N/A')} MB")
         
         # Find matching CSV files
         ts_match = re.search(r'(\d{8}_\d{6})', selected_bench['filepath'])
@@ -518,7 +587,7 @@ def main():
                 recall_df = load_recall_data(matching_recall[0])
         
         # Key Metrics Summary
-        st.header("📈 Key Metrics Summary")
+        st.header("Key Metrics Summary")
         
         col1, col2, col3, col4 = st.columns(4)
         
@@ -565,7 +634,7 @@ def main():
             if 10 in selected_bench['recall']:
                 m_recall = selected_bench['recall'][10]['Milvus']
                 w_recall = selected_bench['recall'][10]['Weaviate']
-                winner = "🏆 Weaviate" if w_recall > m_recall else "🏆 Milvus"
+                winner = "Weaviate" if w_recall > m_recall else "🏆 Milvus"
                 diff = abs(w_recall - m_recall) * 100
                 st.metric(
                     "Recall@10 Winner",
@@ -577,7 +646,7 @@ def main():
         
         # Loading Performance Section
         if show_loading:
-            st.header("⏱️ Data Loading Performance")
+            st.header("Data Loading Performance")
             
             col1, col2 = st.columns(2)
             
@@ -617,7 +686,7 @@ def main():
         
         # Query Performance Section
         if show_latency and comparison_df is not None:
-            st.header("⚡ Query Latency Performance")
+            st.header("Query Latency Performance")
             
             latency_metric = st.radio(
                 "Select Latency Percentile",
@@ -640,7 +709,7 @@ def main():
         
         # QPS Section
         if show_qps and comparison_df is not None:
-            st.header("🚀 Queries Per Second (Throughput)")
+            st.header("Queries Per Second (Throughput)")
             
             fig = create_qps_chart(comparison_df)
             st.plotly_chart(fig, use_container_width=True)
@@ -649,7 +718,7 @@ def main():
         
         # Recall Section
         if show_recall:
-            st.header("🎯 Recall@K Accuracy")
+            st.header("Recall@K Accuracy")
             
             col1, col2 = st.columns([2, 1])
             
@@ -702,7 +771,7 @@ def main():
         
         # Raw Data Section
         if show_raw_data:
-            st.header("📋 Raw Data")
+            st.header("Raw Data")
             
             if comparison_df is not None:
                 st.subheader("Query Performance Data")
@@ -713,33 +782,61 @@ def main():
                 st.dataframe(recall_df, use_container_width=True)
     
     # Recommendations Section
-    st.header("💡 Recommendations")
+    st.header("💡 AI-Powered Recommendations")
     
-    col1, col2 = st.columns(2)
+    # Get API key from environment or sidebar input
+    env_api_key = os.getenv("OPENAI_API_KEY", "")
     
-    with col1:
-        st.markdown("""
-        ### Choose **Milvus** if:
-        - ⚡ Maximum query performance is critical
-        - 🎛️ You need fine-grained index control
-        - 🖥️ GPU acceleration is needed
-        - 📊 High throughput is a priority
-        """)
+    with st.sidebar:
+        st.divider()
+        st.subheader("🤖 AI Analysis")
+        api_key = st.text_input(
+            "OpenAI API Key",
+            value=env_api_key,
+            type="password",
+            placeholder="sk-...",
+            help="API key loaded from .env file. You can also enter a different key here."
+        )
+        analyze_button = st.button("🔍 Analyze with AI", use_container_width=True)
     
-    with col2:
-        st.markdown("""
-        ### Choose **Weaviate** if:
-        - 🎯 Search accuracy is paramount
-        - 🔍 You need GraphQL API support
-        - 🔄 Hybrid search (vector + keyword) is important
-        - 🛠️ Easier setup and management is preferred
-        """)
+    if api_key and analyze_button:
+        with st.spinner("🤖 AI is analyzing your benchmark data..."):
+            ai_recommendations = get_ai_recommendations(comparison_df, recall_df, api_key)
+            if ai_recommendations:
+                st.session_state['ai_recommendations'] = ai_recommendations
+    
+    # Display AI recommendations if available
+    if 'ai_recommendations' in st.session_state and st.session_state['ai_recommendations']:
+        st.markdown(st.session_state['ai_recommendations'])
+    else:
+        # Default recommendations when no AI analysis
+        st.info("💡 Enter your OpenAI API key in the sidebar and click 'Analyze with AI' to get personalized recommendations based on your benchmark data.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+            ### Choose **Milvus** if:
+            - Maximum query performance is critical
+            - You need fine-grained index control
+            - GPU acceleration is needed
+            - High throughput is a priority
+            """)
+        
+        with col2:
+            st.markdown("""
+            ### Choose **Weaviate** if:
+            - Search accuracy is paramount
+            - You need GraphQL API support
+            - Hybrid search (vector + keyword) is important
+            - Easier setup and management is preferred
+            """)
     
     # Footer
     st.divider()
     st.markdown("""
     <div style='text-align: center; color: #666;'>
-        <p>Built with ❤️ for the Vector DB community</p>
+        <p>Built by minageus, cobra, mountzouris</p>
         <p>Run <code>python run_benchmark.py</code> to generate new benchmarks</p>
     </div>
     """, unsafe_allow_html=True)
