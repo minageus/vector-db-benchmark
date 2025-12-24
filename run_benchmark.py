@@ -11,6 +11,7 @@ This script covers ALL project requirements:
 
 Usage:
     python run_benchmark.py --dataset sift1m            # 1M vectors, 128D
+    python run_benchmark.py --dataset sift10m           # 10M vectors, 128D (BigANN subset)
     python run_benchmark.py --dataset gist1m            # 1M x 960D (biggest)
     python run_benchmark.py --dataset glove-25          # 1.2M vectors, 25D (fast)
     python run_benchmark.py --dataset glove-200         # 1.2M vectors, 200D (WARNING: high memory)
@@ -19,6 +20,7 @@ Usage:
     # Use --subset for smaller tests:
     python run_benchmark.py --dataset glove-25 --subset 500000   # 500K subset
     python run_benchmark.py --dataset sift1m --subset 100000     # 100K subset
+    python run_benchmark.py --dataset sift10m --subset 1000000   # 1M subset of 10M
 """
 
 import argparse
@@ -134,7 +136,15 @@ def run_complete_benchmark(
     print_section("STEP 2: DATA LOADING (with time/memory monitoring)")
 
     # Estimate time for large datasets
-    if n_vectors >= 1000000:
+    if n_vectors >= 10000000:
+        est_load_mins = (n_vectors / 1000000) * 12  # ~12 min per 1M vectors for 10M+
+        est_index_mins = (n_vectors / 1000000) * 20  # ~20 min per 1M vectors for 10M+
+        print(f"\n[INFO] Very large dataset detected ({n_vectors:,} vectors)")
+        print(f"  Estimated data loading time: ~{est_load_mins:.0f} minutes")
+        print(f"  Estimated index building time: ~{est_index_mins:.0f} minutes")
+        print(f"  Total estimated time for Step 2: ~{est_load_mins + est_index_mins:.0f} minutes")
+        print(f"  WARNING: This will require significant memory (~16GB+ RAM recommended)\n")
+    elif n_vectors >= 1000000:
         est_load_mins = (n_vectors / 1000000) * 15  # ~15 min per 1M vectors
         est_index_mins = (n_vectors / 1000000) * 25  # ~25 min per 1M vectors
         print(f"\n[INFO] Large dataset detected ({n_vectors:,} vectors)")
@@ -151,31 +161,43 @@ def run_complete_benchmark(
     milvus_loader.create_collection(collection_name, dimension)
 
     # Optimize batch size for large datasets
-    if n_vectors >= 1000000:
+    if n_vectors >= 10000000:
+        batch_size = min(100000, 1000000 // dimension)  # Even larger batches for 10M+
+    elif n_vectors >= 1000000:
         batch_size = min(50000, 500000 // dimension)  # Larger batches for big datasets
     else:
         batch_size = max(100, min(10000, 100000 // dimension))
     
     # Optimize index params for large datasets (faster build)
-    if n_vectors >= 1000000:
+    if n_vectors >= 10000000:
+        index_params = {"M": 8, "efConstruction": 100}  # Even faster for very large datasets
+        index_timeout = 7200  # 2 hour timeout for 10M+
+        print(f"  Using optimized index params for very large dataset: M=8, efConstruction=100")
+    elif n_vectors >= 1000000:
         index_params = {"M": 8, "efConstruction": 128}  # Faster for large datasets
+        index_timeout = 1800  # 30 min timeout
         print(f"  Using optimized index params for large dataset: M=8, efConstruction=128")
     else:
         index_params = {"M": 16, "efConstruction": 200}  # Better quality for smaller datasets
+        index_timeout = 1800
     
     with ResourceMonitor() as milvus_monitor:
         load_start = time.time()
         milvus_loader.load_data(ids, base_vectors, metadata, batch_size=batch_size)
         milvus_loader.create_index(index_type='HNSW', metric_type=metric_type, 
-                                   index_params=index_params, wait_timeout=1800)  # 30 min timeout
+                                   index_params=index_params, wait_timeout=index_timeout)
         milvus_load_time = time.time() - load_start
 
     # Load collection into memory AFTER monitoring to avoid state issues
     print("  Loading collection into memory...")
-    milvus_loader.load_collection(timeout=300)
+    load_timeout = 600 if n_vectors >= 10000000 else 300  # 10 min for 10M+, 5 min otherwise
+    milvus_loader.load_collection(timeout=load_timeout)
     
     # Give extra time for large collections to stabilize
-    if n_vectors > 500000:
+    if n_vectors >= 10000000:
+        print("  Very large dataset detected, waiting for stabilization...")
+        time.sleep(10)
+    elif n_vectors > 500000:
         print("  Large dataset detected, waiting for stabilization...")
         time.sleep(5)
     else:
@@ -516,7 +538,7 @@ Examples:
     parser.add_argument('--dataset', type=str, default='sift1m',
                        choices=[
                            # Standard ANN datasets
-                           'sift1m', 'gist1m', 
+                           'sift1m', 'sift10m', 'gist1m', 
                            # Word embeddings (varied sizes)
                            'glove-25', 'glove-100', 'glove-200', 'glove-300',
                            # Image datasets (HDF5 from ann-benchmarks.com)
@@ -526,7 +548,7 @@ Examples:
                            # Sparse/test datasets
                            'kosarak-27983', 'random-xs-20'
                        ],
-                       help='Dataset to use (default: sift1m)')
+                       help='Dataset to use (default: sift1m). sift10m is a 10M vector BigANN subset.')
     parser.add_argument('--subset', type=int, default=None,
                        help='Use subset of N vectors (for faster testing)')
     parser.add_argument('--skip-scalability', action='store_true',

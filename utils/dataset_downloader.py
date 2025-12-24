@@ -42,6 +42,17 @@ class DatasetDownloader:
             'description': 'SIFT10K - 10K SIFT descriptors (128D) - Small test set',
             'files': ['siftsmall_base.fvecs', 'siftsmall_query.fvecs', 'siftsmall_groundtruth.ivecs']
         },
+        'sift10m': {
+            'base_url': 'ftp://ftp.irisa.fr/local/texmex/corpus/bigann_base.bvecs.gz',
+            'query_url': 'ftp://ftp.irisa.fr/local/texmex/corpus/bigann_query.bvecs.gz',
+            'groundtruth_url': 'ftp://ftp.irisa.fr/local/texmex/corpus/gnd/idx_10M.ivecs',
+            'learn_url': 'ftp://ftp.irisa.fr/local/texmex/corpus/bigann_learn.bvecs.gz',
+            'size_mb': 12000,
+            'description': 'SIFT10M - 10M SIFT descriptors (128D) - BigANN subset',
+            'files': ['bigann_base.bvecs', 'bigann_query.bvecs', 'idx_10M.ivecs'],
+            'n_vectors': 10000000,
+            'is_bigann_subset': True
+        },
         'gist1m': {
             'url': 'http://corpus-texmex.irisa.fr/gist.tar.gz',
             'mirror_urls': [
@@ -123,7 +134,7 @@ class DatasetDownloader:
         Download dataset if not cached
         
         Args:
-            name: Dataset name (sift1m, gist1m, glove-100)
+            name: Dataset name (sift1m, gist1m, glove-100, sift10m)
             force: Force re-download even if cached
             
         Returns:
@@ -131,6 +142,10 @@ class DatasetDownloader:
         """
         if name not in self.DATASETS:
             raise ValueError(f"Unknown dataset: {name}. Available: {list(self.DATASETS.keys())}")
+        
+        # Handle special case for sift10m (BigANN subset)
+        if name == 'sift10m':
+            return self.download_sift10m(force=force)
         
         dataset_info = self.DATASETS[name]
         dataset_dir = self.cache_dir / name
@@ -193,6 +208,147 @@ class DatasetDownloader:
         print(f"\nOK Dataset downloaded to: {dataset_dir}")
         return dataset_dir
     
+    def download_sift10m(self, force: bool = False) -> Path:
+        """
+        Download SIFT10M (BigANN 10M subset) dataset
+        
+        This is a special case because BigANN is split into multiple files
+        and we only need the first 10M vectors.
+        """
+        dataset_info = self.DATASETS['sift10m']
+        dataset_dir = self.cache_dir / 'sift10m'
+        
+        if dataset_dir.exists() and not force:
+            # Check if we have the necessary processed files
+            if (dataset_dir / 'sift10m_base.fvecs').exists():
+                print(f"OK Dataset 'sift10m' already cached at {dataset_dir}")
+                return dataset_dir
+        
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        
+        print(f"\n{'='*60}")
+        print(f"Downloading: {dataset_info['description']}")
+        print(f"Size: ~{dataset_info['size_mb']} MB (downloading only first 10M vectors)")
+        print(f"{'='*60}\n")
+        print("WARNING: This is a large download (~12GB for base vectors).")
+        print("The download will fetch the BigANN base file and extract the first 10M vectors.\n")
+        
+        # Download base vectors (this is the big one ~12GB compressed)
+        base_gz = dataset_dir / 'bigann_base.bvecs.gz'
+        if not base_gz.exists() and not (dataset_dir / 'sift10m_base.fvecs').exists():
+            print("Downloading base vectors (this will take a while)...")
+            try:
+                self._download_file(dataset_info['base_url'], base_gz)
+            except Exception as e:
+                print(f"\nFailed to download base vectors: {e}")
+                print("\nManual download instructions:")
+                print(f"1. Download: {dataset_info['base_url']}")
+                print(f"2. Place in: {dataset_dir}")
+                raise
+        
+        # Download query vectors
+        query_gz = dataset_dir / 'bigann_query.bvecs.gz'
+        if not query_gz.exists() and not (dataset_dir / 'sift10m_query.fvecs').exists():
+            print("Downloading query vectors...")
+            self._download_file(dataset_info['query_url'], query_gz)
+        
+        # Download groundtruth for 10M subset
+        gt_file = dataset_dir / 'idx_10M.ivecs'
+        if not gt_file.exists():
+            print("Downloading groundtruth for 10M subset...")
+            self._download_file(dataset_info['groundtruth_url'], gt_file)
+        
+        # Extract and convert to fvecs format (only first 10M vectors)
+        if not (dataset_dir / 'sift10m_base.fvecs').exists():
+            print("\nExtracting and converting base vectors (first 10M only)...")
+            print("This may take several minutes...")
+            self._extract_bigann_subset(base_gz, dataset_dir / 'sift10m_base.fvecs', 
+                                        n_vectors=10000000, dimension=128)
+            # Optionally remove the compressed file to save space
+            # base_gz.unlink()
+        
+        if not (dataset_dir / 'sift10m_query.fvecs').exists():
+            print("Extracting and converting query vectors...")
+            self._extract_bigann_all(query_gz, dataset_dir / 'sift10m_query.fvecs', dimension=128)
+        
+        print(f"\nOK Dataset downloaded and processed to: {dataset_dir}")
+        return dataset_dir
+    
+    def _extract_bigann_subset(self, gz_file: Path, output_file: Path, n_vectors: int, dimension: int):
+        """
+        Extract first n_vectors from a BigANN .bvecs.gz file and convert to .fvecs format
+        """
+        import gzip
+        
+        vec_size = 4 + dimension  # 4 bytes for dim + dim bytes for uint8 values
+        total_bytes = n_vectors * vec_size
+        
+        vectors = []
+        bytes_read = 0
+        
+        with gzip.open(gz_file, 'rb') as f:
+            with tqdm(total=n_vectors, unit='vectors', desc='Converting') as pbar:
+                while bytes_read < total_bytes and len(vectors) < n_vectors:
+                    # Read dimension
+                    dim_bytes = f.read(4)
+                    if len(dim_bytes) < 4:
+                        break
+                    dim = np.frombuffer(dim_bytes, dtype=np.int32)[0]
+                    
+                    # Read vector
+                    vec_bytes = f.read(dim)
+                    if len(vec_bytes) < dim:
+                        break
+                    vec = np.frombuffer(vec_bytes, dtype=np.uint8).astype(np.float32)
+                    vectors.append(vec)
+                    
+                    bytes_read += 4 + dim
+                    pbar.update(1)
+        
+        # Convert to numpy array and save as fvecs
+        vectors = np.array(vectors, dtype=np.float32)
+        self._write_fvecs(output_file, vectors)
+        print(f"  Saved {len(vectors):,} vectors to {output_file}")
+    
+    def _extract_bigann_all(self, gz_file: Path, output_file: Path, dimension: int):
+        """
+        Extract all vectors from a BigANN .bvecs.gz file and convert to .fvecs format
+        """
+        import gzip
+        
+        vectors = []
+        
+        with gzip.open(gz_file, 'rb') as f:
+            while True:
+                # Read dimension
+                dim_bytes = f.read(4)
+                if len(dim_bytes) < 4:
+                    break
+                dim = np.frombuffer(dim_bytes, dtype=np.int32)[0]
+                
+                # Read vector
+                vec_bytes = f.read(dim)
+                if len(vec_bytes) < dim:
+                    break
+                vec = np.frombuffer(vec_bytes, dtype=np.uint8).astype(np.float32)
+                vectors.append(vec)
+        
+        vectors = np.array(vectors, dtype=np.float32)
+        self._write_fvecs(output_file, vectors)
+        print(f"  Saved {len(vectors):,} vectors to {output_file}")
+    
+    def _write_fvecs(self, filepath: Path, vectors: np.ndarray):
+        """
+        Write vectors to .fvecs format
+        """
+        n_vectors, dim = vectors.shape
+        with open(filepath, 'wb') as f:
+            for i in range(n_vectors):
+                # Write dimension as int32
+                np.array([dim], dtype=np.int32).tofile(f)
+                # Write vector as float32
+                vectors[i].astype(np.float32).tofile(f)
+
     def _download_file(self, url: str, filepath: Path) -> None:
         """Download file with progress bar"""
         # Handle FTP URLs

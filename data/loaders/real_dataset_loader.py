@@ -137,6 +137,63 @@ class RealDatasetLoader:
             }
         }
     
+    def load_sift10m(self, download: bool = True) -> Dict[str, Any]:
+        """
+        Load SIFT10M dataset (BigANN 10M subset)
+        
+        Returns:
+            dict with keys:
+                - base: (10M, 128) base vectors
+                - query: (10K, 128) query vectors
+                - groundtruth: (10K, 100) ground truth neighbors
+                - metadata: dataset information
+        """
+        dataset_name = 'sift10m'
+        dataset_dir = self.downloader.get_dataset_path(dataset_name)
+        
+        if dataset_dir is None:
+            if download:
+                print(f"Dataset not found. Downloading {dataset_name}...")
+                print("WARNING: This is a large dataset (~12GB download). This may take a while.")
+                dataset_dir = self.downloader.download_dataset(dataset_name)
+            else:
+                raise FileNotFoundError(f"Dataset {dataset_name} not found. Use download=True")
+        
+        # The processed files are in fvecs format
+        sift_dir = dataset_dir
+        
+        print(f"\nLoading SIFT10M from {sift_dir}...")
+        print("This may take a few minutes due to dataset size...")
+        
+        # Load vectors
+        base = read_fvecs(str(sift_dir / 'sift10m_base.fvecs'))
+        query = read_fvecs(str(sift_dir / 'sift10m_query.fvecs'))
+        groundtruth = read_ivecs(str(sift_dir / 'idx_10M.ivecs'))
+        
+        print(f"OK Loaded SIFT10M:")
+        print(f"  Base vectors: {base.shape}")
+        print(f"  Query vectors: {query.shape}")
+        print(f"  Ground truth: {groundtruth.shape}")
+        
+        # Generate metadata
+        metadata = self._generate_metadata(base.shape[0])
+        
+        return {
+            'base': base,
+            'query': query,
+            'groundtruth': groundtruth,
+            'learn': None,
+            'metadata': metadata,
+            'info': {
+                'name': 'SIFT10M',
+                'dimension': 128,
+                'n_base': base.shape[0],
+                'n_query': query.shape[0],
+                'metric': 'L2',
+                'dtype': 'float32'
+            }
+        }
+    
     def load_glove(self, dimension: int = 100, download: bool = True, max_vectors: Optional[int] = None) -> Dict[str, Any]:
         """
         Load GloVe word embeddings
@@ -296,7 +353,7 @@ class RealDatasetLoader:
         Load any dataset by name
         
         Args:
-            name: Dataset name (sift1m, gist1m, glove-100, mnist-784, etc.)
+            name: Dataset name (sift1m, sift10m, gist1m, glove-100, mnist-784, etc.)
             **kwargs: Additional arguments for specific loaders
             
         Returns:
@@ -305,6 +362,7 @@ class RealDatasetLoader:
         # Datasets with specific loaders
         specific_loaders = {
             'sift1m': self.load_sift1m,
+            'sift10m': self.load_sift10m,
             'gist1m': self.load_gist1m,
             'glove-100': lambda **kw: self.load_glove(dimension=100, **kw),
             'glove-200': lambda **kw: self.load_glove(dimension=200, **kw),
