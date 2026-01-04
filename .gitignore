@@ -29,9 +29,9 @@ volumes/
 
 # Results and reports
 results/
+!results/complete_benchmark*.txt
 *.csv
 *.png
-*.txt
 report/
 
 # IDE

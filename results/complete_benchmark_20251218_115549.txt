@@ -1,0 +1,65 @@
+================================================================================
+VECTOR DATABASE BENCHMARK: MILVUS vs WEAVIATE
+================================================================================
+
+Date: 2025-12-18 12:10:15
+Dataset: glove-25 (500,000 vectors, 25D)
+
+--------------------------------------------------------------------------------
+DATA LOADING PERFORMANCE
+--------------------------------------------------------------------------------
+
+Milvus:
+  Load Time: 32.4 seconds
+  Peak Memory: 403.5 MB
+
+Weaviate:
+  Load Time: 313.1 seconds
+  Peak Memory: 544.0 MB
+
+--------------------------------------------------------------------------------
+STORAGE EFFICIENCY
+--------------------------------------------------------------------------------
+
+Raw Data Size: 47.68 MB
+
+--------------------------------------------------------------------------------
+QUERY PERFORMANCE
+--------------------------------------------------------------------------------
+
+   Database            Test   P50 (ms)   P95 (ms)   P99 (ms)  Mean (ms)         QPS
+0    Milvus    k10_nofilter   3.726721   5.317819   8.360937   3.977518  251.413062
+1    Milvus   k100_nofilter   3.999472   6.047857   7.396052   4.284648  233.391378
+2    Milvus  k1000_nofilter   7.155299  10.801923  13.572061   7.998356  125.025687
+3    Milvus      k10_filter   3.643394  10.646844  12.100818   5.701358  175.396807
+4    Milvus     k100_filter   4.222989  11.308002  13.933902   6.458258  154.840506
+5  Weaviate    k10_nofilter   4.897594  20.156419  66.254296   8.839846  113.124147
+6  Weaviate   k100_nofilter   5.206227   7.409549   9.597270   5.658330  176.730584
+7  Weaviate  k1000_nofilter  23.922801  30.570328  53.134782  25.567261   39.112519
+8  Weaviate      k10_filter   3.912926  15.061009  19.520245   6.749617  148.156563
+9  Weaviate     k100_filter   5.933881  17.397678  22.404647   9.222372  108.431973
+
+--------------------------------------------------------------------------------
+RECALL@K ACCURACY
+--------------------------------------------------------------------------------
+
+Recall@1: Milvus=0.0030, Weaviate=0.4290
+Recall@5: Milvus=0.0056, Weaviate=0.4294
+Recall@10: Milvus=0.0055, Weaviate=0.4274
+Recall@20: Milvus=0.0076, Weaviate=0.4229
+Recall@50: Milvus=0.0107, Weaviate=0.4233
+Recall@100: Milvus=0.0138, Weaviate=0.4210
+
+================================================================================
+SUMMARY & RECOMMENDATIONS
+================================================================================
+
+Choose Milvus if:
+  - Maximum query performance is critical
+  - You need fine-grained index control
+  - GPU acceleration is needed
+
+Choose Weaviate if:
+  - You need GraphQL API support
+  - Hybrid search (vector + keyword) is important
+  - Easier setup and management is preferred
