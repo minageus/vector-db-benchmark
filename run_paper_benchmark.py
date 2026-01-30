@@ -42,6 +42,7 @@ from queries.query_generator import QueryGenerator
 from utils.resource_monitor import ResourceMonitor
 from utils.storage_analyzer import StorageAnalyzer, calculate_raw_data_size
 from utils.recall_calculator import RecallCalculator
+from utils.concurrent_tester import ConcurrentTester
 
 
 # =============================================================================
@@ -78,23 +79,77 @@ class BenchmarkConfig:
 
 
 # =============================================================================
+# DEPLOYMENT CONFIGURATION
+# =============================================================================
+
+def get_deployment_config(mode: str) -> dict:
+    """Return connection params based on deployment mode."""
+    if mode == 'standalone':
+        return {
+            'milvus_host': 'localhost', 'milvus_port': 19530,
+            'weaviate_host': 'localhost', 'weaviate_port': 8080,
+            'weaviate_grpc_port': 50051,
+        }
+    else:  # cluster
+        return {
+            'milvus_host': 'localhost', 'milvus_port': 19530,
+            'weaviate_host': 'localhost', 'weaviate_port': 8080,
+            'weaviate_grpc_port': 50051,
+        }
+
+
+# =============================================================================
+# SEARCH WRAPPERS FOR CONCURRENT TESTING
+# =============================================================================
+
+def make_milvus_search_func(collection, metric_type: str, ef: int, top_k: int = 10):
+    """Create a single-vector search callable for ConcurrentTester."""
+    search_params = {"metric_type": metric_type, "params": {"ef": ef}}
+    def search_func(query_vector: np.ndarray):
+        return collection.search(
+            data=[query_vector.tolist()],
+            anns_field="embedding",
+            param=search_params,
+            limit=top_k
+        )
+    return search_func
+
+
+def make_weaviate_search_func(collection, top_k: int = 10):
+    """Create a single-vector search callable for ConcurrentTester."""
+    def search_func(query_vector: np.ndarray):
+        return collection.query.near_vector(
+            near_vector=query_vector.tolist(),
+            limit=top_k,
+            return_properties=["vectorId"]
+        )
+    return search_func
+
+
+# =============================================================================
 # BENCHMARK RUNNER
 # =============================================================================
 
 class PaperBenchmarkRunner:
     """Run fair benchmarks for academic paper"""
     
-    def __init__(self, config: BenchmarkConfig, output_dir: str = 'results/paper'):
+    def __init__(self, config: BenchmarkConfig, output_dir: str = 'results/paper',
+                 deploy_config: dict = None, concurrent_clients: List[int] = None,
+                 skip_concurrent: bool = False):
         self.config = config
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
+        self.deploy_config = deploy_config or get_deployment_config('standalone')
+        self.concurrent_clients = concurrent_clients or [1, 2, 4, 8, 16]
+        self.skip_concurrent = skip_concurrent
+
         self.results = {
             'config': asdict(config),
             'loading': {},
             'query_performance': [],
             'recall': {},
+            'concurrent': {},
             'runs': []
         }
     
@@ -156,7 +211,10 @@ class PaperBenchmarkRunner:
         """Setup Milvus with FAIR index parameters"""
         print("\n[Milvus] Setting up with fair index parameters...")
         
-        loader = MilvusLoader()
+        loader = MilvusLoader(
+            host=self.deploy_config['milvus_host'],
+            port=self.deploy_config['milvus_port']
+        )
         loader.connect()
         loader.create_collection(collection_name, self.dimension)
         
@@ -205,8 +263,12 @@ class PaperBenchmarkRunner:
         """Setup Weaviate with FAIR index parameters - requires modifying the loader"""
         print("\n[Weaviate] Setting up with fair index parameters...")
         
-        loader = WeaviateLoader()
-        
+        loader = WeaviateLoader(
+            host=self.deploy_config['weaviate_host'],
+            port=self.deploy_config['weaviate_port'],
+            grpc_port=self.deploy_config['weaviate_grpc_port']
+        )
+
         # Override the INDEX_CONFIG to match Milvus (FAIR comparison)
         loader.INDEX_CONFIG = {
             'type': 'HNSW',
@@ -460,6 +522,74 @@ class PaperBenchmarkRunner:
         
         return sweep_df
     
+    def run_concurrent_benchmark(
+        self,
+        milvus_exec: MilvusQueryExecutor,
+        weaviate_exec: WeaviateQueryExecutor,
+    ) -> Dict:
+        """Run concurrent load tests with varying client counts."""
+        self.print_section("STEP 6: CONCURRENT LOAD TEST")
+        print(f"Client counts: {self.concurrent_clients}")
+
+        milvus_search = make_milvus_search_func(
+            milvus_exec.collection, self.metric_type,
+            self.config.index_config.ef, top_k=10
+        )
+        weaviate_search = make_weaviate_search_func(
+            weaviate_exec.collection, top_k=10
+        )
+
+        concurrent_results = {'milvus': [], 'weaviate': []}
+
+        for n_clients in self.concurrent_clients:
+            print(f"\n  Testing {n_clients} concurrent client(s)...")
+
+            tester = ConcurrentTester(n_clients=n_clients)
+            milvus_result = tester.run_load_test(
+                milvus_search, self.query_vectors,
+                duration_seconds=30, warmup_seconds=2
+            )
+            concurrent_results['milvus'].append({
+                'n_clients': n_clients,
+                'qps': milvus_result.qps,
+                'p50_ms': milvus_result.p50 * 1000,
+                'p95_ms': milvus_result.p95 * 1000,
+                'p99_ms': milvus_result.p99 * 1000,
+                'mean_ms': milvus_result.mean * 1000,
+                'failed': milvus_result.failed_requests,
+            })
+
+            tester2 = ConcurrentTester(n_clients=n_clients)
+            weaviate_result = tester2.run_load_test(
+                weaviate_search, self.query_vectors,
+                duration_seconds=30, warmup_seconds=2
+            )
+            concurrent_results['weaviate'].append({
+                'n_clients': n_clients,
+                'qps': weaviate_result.qps,
+                'p50_ms': weaviate_result.p50 * 1000,
+                'p95_ms': weaviate_result.p95 * 1000,
+                'p99_ms': weaviate_result.p99 * 1000,
+                'mean_ms': weaviate_result.mean * 1000,
+                'failed': weaviate_result.failed_requests,
+            })
+
+            print(f"    Milvus:   QPS={milvus_result.qps:.1f}, P50={milvus_result.p50*1000:.2f}ms")
+            print(f"    Weaviate: QPS={weaviate_result.qps:.1f}, P50={weaviate_result.p50*1000:.2f}ms")
+
+        self.results['concurrent'] = concurrent_results
+
+        # Save concurrent CSV
+        rows = []
+        for db_name in ['milvus', 'weaviate']:
+            for entry in concurrent_results[db_name]:
+                rows.append({'database': db_name.capitalize(), **entry})
+        pd.DataFrame(rows).to_csv(
+            self.output_dir / f'concurrent_load_test_{self.timestamp}.csv', index=False
+        )
+
+        return concurrent_results
+
     def generate_report(self):
         """Generate comprehensive report"""
         self.print_section("FINAL REPORT")
@@ -506,6 +636,17 @@ class PaperBenchmarkRunner:
                     k = k_str.replace('k', '')
                     f.write(f"Recall@{k}: Milvus={recalls['Milvus']:.4f}, Weaviate={recalls['Weaviate']:.4f}\n")
             
+            # Concurrent load test
+            if self.results.get('concurrent') and self.results['concurrent'].get('milvus'):
+                f.write("\n" + "-" * 80 + "\n")
+                f.write("CONCURRENT LOAD TEST (QPS Scaling)\n")
+                f.write("-" * 80 + "\n\n")
+                f.write(f"{'Clients':>8} | {'Milvus QPS':>12} {'P50ms':>8} {'P95ms':>8} | {'Weaviate QPS':>14} {'P50ms':>8} {'P95ms':>8}\n")
+                f.write("-" * 78 + "\n")
+                for m, w in zip(self.results['concurrent']['milvus'],
+                                self.results['concurrent']['weaviate']):
+                    f.write(f"{m['n_clients']:>8} | {m['qps']:>12.1f} {m['p50_ms']:>8.2f} {m['p95_ms']:>8.2f} | {w['qps']:>14.1f} {w['p50_ms']:>8.2f} {w['p95_ms']:>8.2f}\n")
+
             # Fair comparison note
             f.write("\n" + "=" * 80 + "\n")
             f.write("METHODOLOGY NOTE\n")
@@ -528,7 +669,8 @@ class PaperBenchmarkRunner:
             'config': asdict(self.config),
             'loading': self.results['loading'],
             'aggregated': agg_df.to_dict('records') if not agg_df.empty else [],
-            'recall': self.results['recall']
+            'recall': self.results['recall'],
+            'concurrent': self.results.get('concurrent', {})
         }
         json_results['config']['index_config'] = asdict(self.config.index_config)
         
@@ -582,7 +724,13 @@ class PaperBenchmarkRunner:
                 print(f"  {k_str}: Milvus={recalls['Milvus']:.4f}, Weaviate={recalls['Weaviate']:.4f}")
         else:
             print("  [SKIP] No ground truth available")
-        
+
+        # Concurrent load test
+        if not self.skip_concurrent:
+            self.run_concurrent_benchmark(milvus_exec, weaviate_exec)
+        else:
+            print("\n[SKIP] Concurrent load test (--skip-concurrent)")
+
         # Generate report
         self.generate_report()
         
@@ -635,7 +783,18 @@ Examples:
     # Sweep mode
     parser.add_argument('--sweep-ef', action='store_true',
                        help='Run ef parameter sweep for latency-recall tradeoff')
-    
+
+    # Deployment mode
+    parser.add_argument('--mode', type=str, default='standalone',
+                       choices=['standalone', 'cluster'],
+                       help='Deployment mode: standalone or cluster (default: standalone)')
+
+    # Concurrent testing
+    parser.add_argument('--concurrent-clients', type=str, default='1,2,4,8,16',
+                       help='Comma-separated client counts for concurrent test (default: 1,2,4,8,16)')
+    parser.add_argument('--skip-concurrent', action='store_true',
+                       help='Skip concurrent load test')
+
     args = parser.parse_args()
     
     # Create config
@@ -654,8 +813,17 @@ Examples:
         index_config=index_config
     )
     
+    # Deployment and concurrent config
+    deploy_config = get_deployment_config(args.mode)
+    concurrent_clients = [int(x) for x in args.concurrent_clients.split(',')]
+
     # Run benchmark
-    runner = PaperBenchmarkRunner(config)
+    runner = PaperBenchmarkRunner(
+        config,
+        deploy_config=deploy_config,
+        concurrent_clients=concurrent_clients,
+        skip_concurrent=args.skip_concurrent
+    )
     runner.run()
     
     # Optional: ef sweep
