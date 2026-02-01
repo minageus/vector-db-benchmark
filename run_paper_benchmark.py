@@ -251,10 +251,14 @@ class PaperBenchmarkRunner:
         self.results['loading']['Milvus'] = {
             'load_time_seconds': load_time,
             'peak_memory_mb': stats.get('memory_rss_mb', {}).get('max', 0),
+            'avg_cpu_percent': stats.get('cpu', {}).get('mean', 0),
+            'peak_cpu_percent': stats.get('cpu', {}).get('max', 0),
+            'disk_read_mb': stats.get('disk_read_mb', {}).get('total', 0),
+            'disk_write_mb': stats.get('disk_write_mb', {}).get('total', 0),
             'index_config': str(self.config.index_config)
         }
-        
-        print(f"  [OK] Milvus: {load_time:.1f}s, Peak Memory: {self.results['loading']['Milvus']['peak_memory_mb']:.1f} MB")
+
+        print(f"  [OK] Milvus: {load_time:.1f}s, Peak Memory: {self.results['loading']['Milvus']['peak_memory_mb']:.1f} MB, Avg CPU: {self.results['loading']['Milvus']['avg_cpu_percent']:.1f}%")
         
         executor = MilvusQueryExecutor(loader.collection)
         return loader, executor
@@ -300,10 +304,14 @@ class PaperBenchmarkRunner:
         self.results['loading']['Weaviate'] = {
             'load_time_seconds': load_time,
             'peak_memory_mb': stats.get('memory_rss_mb', {}).get('max', 0),
+            'avg_cpu_percent': stats.get('cpu', {}).get('mean', 0),
+            'peak_cpu_percent': stats.get('cpu', {}).get('max', 0),
+            'disk_read_mb': stats.get('disk_read_mb', {}).get('total', 0),
+            'disk_write_mb': stats.get('disk_write_mb', {}).get('total', 0),
             'index_config': str(self.config.index_config)
         }
-        
-        print(f"  [OK] Weaviate: {load_time:.1f}s, Peak Memory: {self.results['loading']['Weaviate']['peak_memory_mb']:.1f} MB")
+
+        print(f"  [OK] Weaviate: {load_time:.1f}s, Peak Memory: {self.results['loading']['Weaviate']['peak_memory_mb']:.1f} MB, Avg CPU: {self.results['loading']['Weaviate']['avg_cpu_percent']:.1f}%")
         
         executor = WeaviateQueryExecutor(loader.client, 'BenchmarkVector')
         return loader, executor
@@ -343,20 +351,24 @@ class PaperBenchmarkRunner:
         weaviate_exec: WeaviateQueryExecutor,
         run_id: int
     ) -> Dict:
-        """Run a single benchmark iteration"""
+        """Run a single benchmark iteration (with and without filters)"""
         print(f"\n--- Run {run_id + 1}/{self.config.num_runs} ---")
-        
+
         run_results = {'milvus': {}, 'weaviate': {}}
-        
+
+        # Generate filters for filtered queries
+        qgen = QueryGenerator()
+        filters = qgen.generate_filter_conditions(len(self.query_vectors), selectivity=0.1)
+
         for k in self.config.k_values:
-            print(f"\n  Testing k={k}...")
-            
-            # Milvus search with fair ef parameter
+            # --- WITHOUT FILTERS ---
+            print(f"\n  Testing k={k} (no filter)...")
+
             search_params = {
                 "metric_type": self.metric_type,
                 "params": {"ef": max(k, self.config.index_config.ef)}
             }
-            
+
             milvus_latencies = []
             milvus_retrieved = []
             for query in self.query_vectors:
@@ -369,7 +381,7 @@ class PaperBenchmarkRunner:
                 )
                 milvus_latencies.append((time.time() - start) * 1000)
                 milvus_retrieved.append([hit.id for hit in results[0]])
-            
+
             milvus_latencies = np.array(milvus_latencies)
             run_results['milvus'][f'k{k}'] = {
                 'p50_ms': np.percentile(milvus_latencies, 50),
@@ -380,8 +392,7 @@ class PaperBenchmarkRunner:
                 'qps': 1000 / np.mean(milvus_latencies),
                 'retrieved': milvus_retrieved
             }
-            
-            # Weaviate search
+
             weaviate_latencies = []
             weaviate_retrieved = []
             for query in self.query_vectors:
@@ -393,7 +404,7 @@ class PaperBenchmarkRunner:
                 )
                 weaviate_latencies.append((time.time() - start) * 1000)
                 weaviate_retrieved.append([obj.properties.get('vectorId', 0) for obj in results.objects])
-            
+
             weaviate_latencies = np.array(weaviate_latencies)
             run_results['weaviate'][f'k{k}'] = {
                 'p50_ms': np.percentile(weaviate_latencies, 50),
@@ -404,10 +415,78 @@ class PaperBenchmarkRunner:
                 'qps': 1000 / np.mean(weaviate_latencies),
                 'retrieved': weaviate_retrieved
             }
-            
+
             print(f"    Milvus:   P50={run_results['milvus'][f'k{k}']['p50_ms']:.2f}ms, QPS={run_results['milvus'][f'k{k}']['qps']:.1f}")
             print(f"    Weaviate: P50={run_results['weaviate'][f'k{k}']['p50_ms']:.2f}ms, QPS={run_results['weaviate'][f'k{k}']['qps']:.1f}")
-        
+
+            # --- WITH FILTERS ---
+            print(f"  Testing k={k} (with filter)...")
+
+            # Milvus filtered search
+            milvus_filter_latencies = []
+            for i, query in enumerate(self.query_vectors):
+                expr = None
+                if i < len(filters) and 'category' in filters[i]:
+                    cats = filters[i]['category']['$in']
+                    expr = f"category in {cats}"
+
+                start = time.time()
+                milvus_exec.collection.search(
+                    data=[query.tolist()],
+                    anns_field="embedding",
+                    param=search_params,
+                    limit=k,
+                    expr=expr
+                )
+                milvus_filter_latencies.append((time.time() - start) * 1000)
+
+            milvus_filter_latencies = np.array(milvus_filter_latencies)
+            run_results['milvus'][f'k{k}_filter'] = {
+                'p50_ms': np.percentile(milvus_filter_latencies, 50),
+                'p95_ms': np.percentile(milvus_filter_latencies, 95),
+                'p99_ms': np.percentile(milvus_filter_latencies, 99),
+                'mean_ms': np.mean(milvus_filter_latencies),
+                'std_ms': np.std(milvus_filter_latencies),
+                'qps': 1000 / np.mean(milvus_filter_latencies),
+            }
+
+            # Weaviate filtered search
+            from weaviate.classes.query import Filter
+            weaviate_filter_latencies = []
+            for i, query in enumerate(self.query_vectors):
+                where_filter = None
+                if i < len(filters) and 'category' in filters[i]:
+                    where_filter = Filter.by_property("category").equal(filters[i]['category']['$in'][0])
+
+                start = time.time()
+                if where_filter:
+                    weaviate_exec.collection.query.near_vector(
+                        near_vector=query.tolist(),
+                        limit=k,
+                        filters=where_filter,
+                        return_properties=["vectorId"]
+                    )
+                else:
+                    weaviate_exec.collection.query.near_vector(
+                        near_vector=query.tolist(),
+                        limit=k,
+                        return_properties=["vectorId"]
+                    )
+                weaviate_filter_latencies.append((time.time() - start) * 1000)
+
+            weaviate_filter_latencies = np.array(weaviate_filter_latencies)
+            run_results['weaviate'][f'k{k}_filter'] = {
+                'p50_ms': np.percentile(weaviate_filter_latencies, 50),
+                'p95_ms': np.percentile(weaviate_filter_latencies, 95),
+                'p99_ms': np.percentile(weaviate_filter_latencies, 99),
+                'mean_ms': np.mean(weaviate_filter_latencies),
+                'std_ms': np.std(weaviate_filter_latencies),
+                'qps': 1000 / np.mean(weaviate_filter_latencies),
+            }
+
+            print(f"    Milvus   (filtered): P50={run_results['milvus'][f'k{k}_filter']['p50_ms']:.2f}ms, QPS={run_results['milvus'][f'k{k}_filter']['qps']:.1f}")
+            print(f"    Weaviate (filtered): P50={run_results['weaviate'][f'k{k}_filter']['p50_ms']:.2f}ms, QPS={run_results['weaviate'][f'k{k}_filter']['qps']:.1f}")
+
         return run_results
     
     def calculate_recall(self, run_results: Dict) -> Dict:
@@ -436,18 +515,24 @@ class PaperBenchmarkRunner:
         """Aggregate results from multiple runs with mean ± std"""
         if not self.results['runs']:
             return pd.DataFrame()
-        
+
         aggregated = []
-        
-        for k in self.config.k_values:
+
+        # Collect all test keys (k10, k100, k10_filter, k100_filter, etc.)
+        all_keys = list(self.results['runs'][0]['milvus'].keys())
+
+        for test_key in all_keys:
             for db in ['milvus', 'weaviate']:
-                p50_values = [r[db][f'k{k}']['p50_ms'] for r in self.results['runs']]
-                p95_values = [r[db][f'k{k}']['p95_ms'] for r in self.results['runs']]
-                qps_values = [r[db][f'k{k}']['qps'] for r in self.results['runs']]
-                
+                try:
+                    p50_values = [r[db][test_key]['p50_ms'] for r in self.results['runs']]
+                    p95_values = [r[db][test_key]['p95_ms'] for r in self.results['runs']]
+                    qps_values = [r[db][test_key]['qps'] for r in self.results['runs']]
+                except KeyError:
+                    continue
+
                 aggregated.append({
                     'Database': db.capitalize(),
-                    'K': k,
+                    'K': test_key,
                     'P50 (ms)': f"{np.mean(p50_values):.2f} ± {np.std(p50_values):.2f}",
                     'P50_mean': np.mean(p50_values),
                     'P50_std': np.std(p50_values),
@@ -458,7 +543,7 @@ class PaperBenchmarkRunner:
                     'QPS_mean': np.mean(qps_values),
                     'QPS_std': np.std(qps_values)
                 })
-        
+
         return pd.DataFrame(aggregated)
     
     def run_ef_sweep(
@@ -615,7 +700,29 @@ class PaperBenchmarkRunner:
                 f.write(f"\n{db}:\n")
                 f.write(f"  Load Time: {stats['load_time_seconds']:.1f} seconds\n")
                 f.write(f"  Peak Memory: {stats['peak_memory_mb']:.1f} MB\n")
+                f.write(f"  Avg CPU: {stats.get('avg_cpu_percent', 0):.1f}%\n")
+                f.write(f"  Peak CPU: {stats.get('peak_cpu_percent', 0):.1f}%\n")
+                f.write(f"  Disk Read: {stats.get('disk_read_mb', 0):.1f} MB\n")
+                f.write(f"  Disk Write: {stats.get('disk_write_mb', 0):.1f} MB\n")
                 f.write(f"  Index Config: {stats['index_config']}\n")
+
+            # Storage efficiency
+            if self.results.get('storage'):
+                f.write("\n" + "-" * 80 + "\n")
+                f.write("STORAGE EFFICIENCY\n")
+                f.write("-" * 80 + "\n\n")
+                st = self.results['storage']
+                f.write(f"Raw data size: {st['raw_data_size_mb']:.2f} MB\n")
+                for db_key in ['milvus', 'weaviate']:
+                    db_st = st.get(db_key, {})
+                    if 'error' not in db_st:
+                        f.write(f"\n{db_key.capitalize()}:\n")
+                        f.write(f"  Total disk usage: {db_st.get('total_size_mb', 0):.2f} MB\n")
+                        if db_st.get('compression_ratio'):
+                            f.write(f"  Compression ratio: {db_st['compression_ratio']:.2f}x\n")
+                        if db_st.get('breakdown'):
+                            for comp, size in db_st['breakdown'].items():
+                                f.write(f"  {comp}: {size:.2f} MB\n")
             
             # Query Performance with statistics
             f.write("\n" + "-" * 80 + "\n")
@@ -626,7 +733,34 @@ class PaperBenchmarkRunner:
             if not agg_df.empty:
                 f.write(agg_df[['Database', 'K', 'P50 (ms)', 'P95 (ms)', 'QPS']].to_string(index=False))
                 f.write("\n")
-            
+
+            # Filtered query performance
+            if self.results['runs']:
+                last_run = self.results['runs'][-1]
+                filter_keys = [k for k in last_run['milvus'] if k.endswith('_filter')]
+                if filter_keys:
+                    f.write("\n" + "-" * 80 + "\n")
+                    f.write("FILTERED QUERY PERFORMANCE (last run)\n")
+                    f.write("-" * 80 + "\n\n")
+                    f.write(f"{'Test':>15} | {'Milvus P50ms':>14} {'QPS':>8} | {'Weaviate P50ms':>16} {'QPS':>8}\n")
+                    f.write("-" * 70 + "\n")
+                    for fk in filter_keys:
+                        m = last_run['milvus'][fk]
+                        w = last_run['weaviate'][fk]
+                        f.write(f"{fk:>15} | {m['p50_ms']:>14.2f} {m['qps']:>8.1f} | {w['p50_ms']:>16.2f} {w['qps']:>8.1f}\n")
+
+            # Query-phase resource usage
+            if self.results.get('query_resources'):
+                qr = self.results['query_resources']
+                f.write("\n" + "-" * 80 + "\n")
+                f.write("RESOURCE USAGE DURING QUERIES\n")
+                f.write("-" * 80 + "\n\n")
+                f.write(f"Avg CPU: {qr['avg_cpu_percent']:.1f}%\n")
+                f.write(f"Peak CPU: {qr['peak_cpu_percent']:.1f}%\n")
+                f.write(f"Peak Memory: {qr['peak_memory_mb']:.1f} MB\n")
+                f.write(f"Disk Read: {qr['disk_read_mb']:.1f} MB\n")
+                f.write(f"Disk Write: {qr['disk_write_mb']:.1f} MB\n")
+
             # Recall
             if self.results['recall']:
                 f.write("\n" + "-" * 80 + "\n")
@@ -670,6 +804,8 @@ class PaperBenchmarkRunner:
             'loading': self.results['loading'],
             'aggregated': agg_df.to_dict('records') if not agg_df.empty else [],
             'recall': self.results['recall'],
+            'storage': self.results.get('storage', {}),
+            'query_resources': self.results.get('query_resources', {}),
             'concurrent': self.results.get('concurrent', {})
         }
         json_results['config']['index_config'] = asdict(self.config.index_config)
@@ -704,16 +840,40 @@ class PaperBenchmarkRunner:
         milvus_loader, milvus_exec = self.setup_milvus(collection_name)
         weaviate_loader, weaviate_exec = self.setup_weaviate()
         
+        # Storage analysis
+        self.print_section("STEP 2b: STORAGE ANALYSIS")
+        raw_size_mb = calculate_raw_data_size(self.n_vectors, self.dimension)
+        storage_analyzer = StorageAnalyzer()
+        milvus_storage = storage_analyzer.analyze_milvus_storage(raw_data_size_mb=raw_size_mb)
+        weaviate_storage = storage_analyzer.analyze_weaviate_storage(raw_data_size_mb=raw_size_mb)
+        self.results['storage'] = {
+            'raw_data_size_mb': raw_size_mb,
+            'milvus': milvus_storage,
+            'weaviate': weaviate_storage,
+        }
+        storage_analyzer.print_comparison()
+
         # Warm-up
         self.print_section("STEP 3: WARM-UP")
         self.run_warmup(milvus_exec, weaviate_exec)
         
         # Run multiple iterations
         self.print_section(f"STEP 4: RUNNING {self.config.num_runs} BENCHMARK ITERATIONS")
-        
-        for run_id in range(self.config.num_runs):
-            run_results = self.run_single_benchmark(milvus_exec, weaviate_exec, run_id)
-            self.results['runs'].append(run_results)
+
+        with ResourceMonitor() as query_monitor:
+            for run_id in range(self.config.num_runs):
+                run_results = self.run_single_benchmark(milvus_exec, weaviate_exec, run_id)
+                self.results['runs'].append(run_results)
+
+        query_stats = query_monitor.get_stats()
+        self.results['query_resources'] = {
+            'avg_cpu_percent': query_stats.get('cpu', {}).get('mean', 0),
+            'peak_cpu_percent': query_stats.get('cpu', {}).get('max', 0),
+            'peak_memory_mb': query_stats.get('memory_rss_mb', {}).get('max', 0),
+            'disk_read_mb': query_stats.get('disk_read_mb', {}).get('total', 0),
+            'disk_write_mb': query_stats.get('disk_write_mb', {}).get('total', 0),
+        }
+        print(f"\n  Query phase resources: Avg CPU={self.results['query_resources']['avg_cpu_percent']:.1f}%, Peak Mem={self.results['query_resources']['peak_memory_mb']:.1f} MB")
         
         # Calculate recall (from last run)
         self.print_section("STEP 5: RECALL CALCULATION")
