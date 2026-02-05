@@ -29,8 +29,9 @@ volumes/
 
 # Results and reports
 results/
+!results/paper/
+!results/paper/*
 !results/complete_benchmark*.txt
-*.csv
 *.png
 report/
 
