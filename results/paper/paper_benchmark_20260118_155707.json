@@ -1,0 +1,94 @@
+{
+  "config": {
+    "dataset": "fashion-mnist-784",
+    "subset": null,
+    "num_runs": 1,
+    "num_warmup_queries": 50,
+    "num_queries": 100,
+    "k_values": [
+      10,
+      100
+    ],
+    "index_config": {
+      "M": 16,
+      "efConstruction": 200,
+      "ef": 200
+    }
+  },
+  "loading": {
+    "Milvus": {
+      "load_time_seconds": 102.33202004432678,
+      "peak_memory_mb": 462.8125,
+      "index_config": "HNSW(M=16, efConstruction=200, ef=200)"
+    },
+    "Weaviate": {
+      "load_time_seconds": 185.31572604179382,
+      "peak_memory_mb": 304.4375,
+      "index_config": "HNSW(M=16, efConstruction=200, ef=200)"
+    }
+  },
+  "aggregated": [
+    {
+      "Database": "Milvus",
+      "K": 10,
+      "P50 (ms)": "4.86 \u00b1 0.00",
+      "P50_mean": 4.862070083618164,
+      "P50_std": 0.0,
+      "P95 (ms)": "7.62 \u00b1 0.00",
+      "P95_mean": 7.621014118194579,
+      "P95_std": 0.0,
+      "QPS": "194.3 \u00b1 0.0",
+      "QPS_mean": 194.29227890085048,
+      "QPS_std": 0.0
+    },
+    {
+      "Database": "Weaviate",
+      "K": 10,
+      "P50 (ms)": "3.69 \u00b1 0.00",
+      "P50_mean": 3.6940574645996094,
+      "P50_std": 0.0,
+      "P95 (ms)": "7.83 \u00b1 0.00",
+      "P95_mean": 7.834470272064208,
+      "P95_std": 0.0,
+      "QPS": "228.2 \u00b1 0.0",
+      "QPS_mean": 228.22827921058544,
+      "QPS_std": 0.0
+    },
+    {
+      "Database": "Milvus",
+      "K": 100,
+      "P50 (ms)": "5.14 \u00b1 0.00",
+      "P50_mean": 5.137324333190918,
+      "P50_std": 0.0,
+      "P95 (ms)": "9.10 \u00b1 0.00",
+      "P95_mean": 9.103953838348389,
+      "P95_std": 0.0,
+      "QPS": "185.2 \u00b1 0.0",
+      "QPS_mean": 185.15879283804372,
+      "QPS_std": 0.0
+    },
+    {
+      "Database": "Weaviate",
+      "K": 100,
+      "P50 (ms)": "5.59 \u00b1 0.00",
+      "P50_mean": 5.5866241455078125,
+      "P50_std": 0.0,
+      "P95 (ms)": "8.60 \u00b1 0.00",
+      "P95_mean": 8.60168933868408,
+      "P95_std": 0.0,
+      "QPS": "169.9 \u00b1 0.0",
+      "QPS_mean": 169.86462033918625,
+      "QPS_std": 0.0
+    }
+  ],
+  "recall": {
+    "k10": {
+      "Milvus": 1.0,
+      "Weaviate": 0.555
+    },
+    "k100": {
+      "Milvus": 0.9996,
+      "Weaviate": 0.5382000000000001
+    }
+  }
+}

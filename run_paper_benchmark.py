@@ -2,7 +2,6 @@
 Paper-Quality Vector Database Benchmark: Milvus vs Weaviate
 ============================================================
 
-This script is designed for academic paper publication with:
 1. FAIR index parameters (identical HNSW config for both databases)
 2. Warm-up queries before measurement
 3. Multiple runs with statistical reporting (mean ± std)
@@ -15,7 +14,7 @@ Usage:
     python run_paper_benchmark.py --dataset sift1m --subset 500000
     python run_paper_benchmark.py --sweep-ef  # Run latency-recall tradeoff
 
-Author: Milvus vs Weaviate Benchmark Project
+Author: minageus, cobra, mountzouris
 """
 
 import argparse
@@ -44,11 +43,6 @@ from utils.storage_analyzer import StorageAnalyzer, calculate_raw_data_size
 from utils.recall_calculator import RecallCalculator
 from utils.concurrent_tester import ConcurrentTester
 
-
-# =============================================================================
-# FAIR INDEX CONFIGURATION (SAME FOR BOTH DATABASES)
-# =============================================================================
-
 @dataclass
 class IndexConfig:
     """Fair HNSW index configuration for both databases"""
@@ -62,7 +56,7 @@ class IndexConfig:
 
 @dataclass
 class BenchmarkConfig:
-    """Configuration for a benchmark run"""
+
     dataset: str = 'sift1m'
     subset: int = None
     num_runs: int = 3
@@ -83,7 +77,6 @@ class BenchmarkConfig:
 # =============================================================================
 
 def get_deployment_config(mode: str) -> dict:
-    """Return connection params based on deployment mode."""
     if mode == 'standalone':
         return {
             'milvus_host': 'localhost', 'milvus_port': 19530,
@@ -103,7 +96,6 @@ def get_deployment_config(mode: str) -> dict:
 # =============================================================================
 
 def make_milvus_search_func(collection, metric_type: str, ef: int, top_k: int = 10):
-    """Create a single-vector search callable for ConcurrentTester."""
     search_params = {"metric_type": metric_type, "params": {"ef": ef}}
     def search_func(query_vector: np.ndarray):
         return collection.search(
@@ -116,7 +108,6 @@ def make_milvus_search_func(collection, metric_type: str, ef: int, top_k: int = 
 
 
 def make_weaviate_search_func(collection, top_k: int = 10):
-    """Create a single-vector search callable for ConcurrentTester."""
     def search_func(query_vector: np.ndarray):
         return collection.query.near_vector(
             near_vector=query_vector.tolist(),
@@ -131,8 +122,6 @@ def make_weaviate_search_func(collection, top_k: int = 10):
 # =============================================================================
 
 class PaperBenchmarkRunner:
-    """Run fair benchmarks for academic paper"""
-    
     def __init__(self, config: BenchmarkConfig, output_dir: str = 'results/paper',
                  deploy_config: dict = None, concurrent_clients: List[int] = None,
                  skip_concurrent: bool = False):
@@ -159,7 +148,6 @@ class PaperBenchmarkRunner:
         print("=" * 80)
     
     def load_dataset(self) -> Dict:
-        """Load and prepare dataset"""
         self.print_section("STEP 1: LOADING DATASET")
         
         print(f"Dataset: {self.config.dataset}")
@@ -181,7 +169,6 @@ class PaperBenchmarkRunner:
         self.n_vectors = self.base_vectors.shape[0]
         self.dimension = self.base_vectors.shape[1]
         
-        # Handle normalization for cosine metric
         dataset_metric = self.info['metric'].lower()
         if dataset_metric in ['cosine', 'angular']:
             print("  Normalizing vectors for cosine similarity...")
@@ -202,13 +189,11 @@ class PaperBenchmarkRunner:
         return data
     
     def _normalize(self, vectors: np.ndarray) -> np.ndarray:
-        """L2 normalize vectors"""
         norms = np.linalg.norm(vectors, axis=1, keepdims=True)
         norms[norms == 0] = 1
         return vectors / norms
     
     def setup_milvus(self, collection_name: str) -> Tuple[MilvusLoader, MilvusQueryExecutor]:
-        """Setup Milvus with FAIR index parameters"""
         print("\n[Milvus] Setting up with fair index parameters...")
         
         loader = MilvusLoader(
@@ -264,7 +249,6 @@ class PaperBenchmarkRunner:
         return loader, executor
     
     def setup_weaviate(self) -> Tuple[WeaviateLoader, WeaviateQueryExecutor]:
-        """Setup Weaviate with FAIR index parameters - requires modifying the loader"""
         print("\n[Weaviate] Setting up with fair index parameters...")
         
         loader = WeaviateLoader(
@@ -273,7 +257,6 @@ class PaperBenchmarkRunner:
             grpc_port=self.deploy_config['weaviate_grpc_port']
         )
 
-        # Override the INDEX_CONFIG to match Milvus (FAIR comparison)
         loader.INDEX_CONFIG = {
             'type': 'HNSW',
             'ef': self.config.index_config.ef,
@@ -285,10 +268,8 @@ class PaperBenchmarkRunner:
         
         print(f"  Index config: {self.config.index_config}")
         
-        # Create schema with fair parameters
         loader.create_schema(self.dimension, metric_type=self.info['metric'])
         
-        # Load data
         batch_size = min(100, 10000 // self.dimension)
         with ResourceMonitor() as monitor:
             load_start = time.time()
@@ -322,7 +303,6 @@ class PaperBenchmarkRunner:
         
         warmup_queries = self.query_vectors[:self.config.num_warmup_queries]
         
-        # Milvus warmup
         search_params = {
             "metric_type": self.metric_type,
             "params": {"ef": self.config.index_config.ef}
@@ -335,7 +315,6 @@ class PaperBenchmarkRunner:
                 limit=10
             )
         
-        # Weaviate warmup
         for q in warmup_queries:
             weaviate_exec.collection.query.near_vector(
                 near_vector=q.tolist(),
@@ -351,12 +330,10 @@ class PaperBenchmarkRunner:
         weaviate_exec: WeaviateQueryExecutor,
         run_id: int
     ) -> Dict:
-        """Run a single benchmark iteration (with and without filters)"""
         print(f"\n--- Run {run_id + 1}/{self.config.num_runs} ---")
 
         run_results = {'milvus': {}, 'weaviate': {}}
 
-        # Generate filters for filtered queries
         qgen = QueryGenerator()
         filters = qgen.generate_filter_conditions(len(self.query_vectors), selectivity=0.1)
 
@@ -419,10 +396,8 @@ class PaperBenchmarkRunner:
             print(f"    Milvus:   P50={run_results['milvus'][f'k{k}']['p50_ms']:.2f}ms, QPS={run_results['milvus'][f'k{k}']['qps']:.1f}")
             print(f"    Weaviate: P50={run_results['weaviate'][f'k{k}']['p50_ms']:.2f}ms, QPS={run_results['weaviate'][f'k{k}']['qps']:.1f}")
 
-            # --- WITH FILTERS ---
             print(f"  Testing k={k} (with filter)...")
 
-            # Milvus filtered search
             milvus_filter_latencies = []
             for i, query in enumerate(self.query_vectors):
                 expr = None
@@ -450,7 +425,6 @@ class PaperBenchmarkRunner:
                 'qps': 1000 / np.mean(milvus_filter_latencies),
             }
 
-            # Weaviate filtered search
             from weaviate.classes.query import Filter
             weaviate_filter_latencies = []
             for i, query in enumerate(self.query_vectors):
@@ -573,7 +547,7 @@ class PaperBenchmarkRunner:
             
             milvus_latencies = []
             milvus_retrieved = []
-            for query in self.query_vectors[:100]:  # Use fewer queries for sweep
+            for query in self.query_vectors[:100]:
                 start = time.time()
                 results = milvus_exec.collection.search(
                     data=[query.tolist()],
@@ -584,7 +558,6 @@ class PaperBenchmarkRunner:
                 milvus_latencies.append((time.time() - start) * 1000)
                 milvus_retrieved.append([hit.id for hit in results[0]])
             
-            # Calculate recall
             if self.groundtruth is not None:
                 recall_calc = RecallCalculator(metric=self.info['metric'].lower())
                 milvus_recall, _ = recall_calc.calculate_recall(milvus_retrieved, self.groundtruth[:100], k=k)
@@ -601,7 +574,6 @@ class PaperBenchmarkRunner:
             
             print(f"    Milvus:   P50={sweep_results[-1]['P50_ms']:.2f}ms, Recall@10={milvus_recall:.4f if milvus_recall else 'N/A'}")
         
-        # Save sweep results
         sweep_df = pd.DataFrame(sweep_results)
         sweep_df.to_csv(self.output_dir / f'ef_sweep_{self.timestamp}.csv', index=False)
         
@@ -612,7 +584,6 @@ class PaperBenchmarkRunner:
         milvus_exec: MilvusQueryExecutor,
         weaviate_exec: WeaviateQueryExecutor,
     ) -> Dict:
-        """Run concurrent load tests with varying client counts."""
         self.print_section("STEP 6: CONCURRENT LOAD TEST")
         print(f"Client counts: {self.concurrent_clients}")
 
@@ -664,7 +635,6 @@ class PaperBenchmarkRunner:
 
         self.results['concurrent'] = concurrent_results
 
-        # Save concurrent CSV
         rows = []
         for db_name in ['milvus', 'weaviate']:
             for entry in concurrent_results[db_name]:
@@ -676,7 +646,6 @@ class PaperBenchmarkRunner:
         return concurrent_results
 
     def generate_report(self):
-        """Generate comprehensive report"""
         self.print_section("FINAL REPORT")
         
         report_file = self.output_dir / f'paper_benchmark_{self.timestamp}.txt'
@@ -724,7 +693,6 @@ class PaperBenchmarkRunner:
                             for comp, size in db_st['breakdown'].items():
                                 f.write(f"  {comp}: {size:.2f} MB\n")
             
-            # Query Performance with statistics
             f.write("\n" + "-" * 80 + "\n")
             f.write("QUERY PERFORMANCE (mean ± std over {} runs)\n".format(self.config.num_runs))
             f.write("-" * 80 + "\n\n")
@@ -734,7 +702,6 @@ class PaperBenchmarkRunner:
                 f.write(agg_df[['Database', 'K', 'P50 (ms)', 'P95 (ms)', 'QPS']].to_string(index=False))
                 f.write("\n")
 
-            # Filtered query performance
             if self.results['runs']:
                 last_run = self.results['runs'][-1]
                 filter_keys = [k for k in last_run['milvus'] if k.endswith('_filter')]
@@ -749,7 +716,6 @@ class PaperBenchmarkRunner:
                         w = last_run['weaviate'][fk]
                         f.write(f"{fk:>15} | {m['p50_ms']:>14.2f} {m['qps']:>8.1f} | {w['p50_ms']:>16.2f} {w['qps']:>8.1f}\n")
 
-            # Query-phase resource usage
             if self.results.get('query_resources'):
                 qr = self.results['query_resources']
                 f.write("\n" + "-" * 80 + "\n")
@@ -761,7 +727,6 @@ class PaperBenchmarkRunner:
                 f.write(f"Disk Read: {qr['disk_read_mb']:.1f} MB\n")
                 f.write(f"Disk Write: {qr['disk_write_mb']:.1f} MB\n")
 
-            # Recall
             if self.results['recall']:
                 f.write("\n" + "-" * 80 + "\n")
                 f.write("RECALL@K ACCURACY\n")
@@ -770,7 +735,6 @@ class PaperBenchmarkRunner:
                     k = k_str.replace('k', '')
                     f.write(f"Recall@{k}: Milvus={recalls['Milvus']:.4f}, Weaviate={recalls['Weaviate']:.4f}\n")
             
-            # Concurrent load test
             if self.results.get('concurrent') and self.results['concurrent'].get('milvus'):
                 f.write("\n" + "-" * 80 + "\n")
                 f.write("CONCURRENT LOAD TEST (QPS Scaling)\n")
@@ -781,7 +745,6 @@ class PaperBenchmarkRunner:
                                 self.results['concurrent']['weaviate']):
                     f.write(f"{m['n_clients']:>8} | {m['qps']:>12.1f} {m['p50_ms']:>8.2f} {m['p95_ms']:>8.2f} | {w['qps']:>14.1f} {w['p50_ms']:>8.2f} {w['p95_ms']:>8.2f}\n")
 
-            # Fair comparison note
             f.write("\n" + "=" * 80 + "\n")
             f.write("METHODOLOGY NOTE\n")
             f.write("=" * 80 + "\n\n")
@@ -795,10 +758,8 @@ class PaperBenchmarkRunner:
         
         print(f"\n[OK] Report saved to: {report_file}")
         
-        # Save raw results as JSON for further analysis
         json_file = self.output_dir / f'paper_benchmark_{self.timestamp}.json'
         
-        # Convert to JSON-serializable format
         json_results = {
             'config': asdict(self.config),
             'loading': self.results['loading'],
@@ -815,7 +776,6 @@ class PaperBenchmarkRunner:
         
         print(f"[OK] JSON results saved to: {json_file}")
         
-        # Save CSV for easy import
         if not agg_df.empty:
             csv_file = self.output_dir / f'paper_benchmark_{self.timestamp}.csv'
             agg_df.to_csv(csv_file, index=False)
@@ -831,16 +791,13 @@ class PaperBenchmarkRunner:
         print(f"  Index: {self.config.index_config}")
         print(f"  K values: {self.config.k_values}")
         
-        # Load dataset
         self.load_dataset()
         
-        # Setup databases with fair parameters
         self.print_section("STEP 2: SETUP DATABASES (Fair Index Parameters)")
         collection_name = f"paper_benchmark_{self.timestamp}"
         milvus_loader, milvus_exec = self.setup_milvus(collection_name)
         weaviate_loader, weaviate_exec = self.setup_weaviate()
         
-        # Storage analysis
         self.print_section("STEP 2b: STORAGE ANALYSIS")
         raw_size_mb = calculate_raw_data_size(self.n_vectors, self.dimension)
         storage_analyzer = StorageAnalyzer()
@@ -853,11 +810,9 @@ class PaperBenchmarkRunner:
         }
         storage_analyzer.print_comparison()
 
-        # Warm-up
         self.print_section("STEP 3: WARM-UP")
         self.run_warmup(milvus_exec, weaviate_exec)
         
-        # Run multiple iterations
         self.print_section(f"STEP 4: RUNNING {self.config.num_runs} BENCHMARK ITERATIONS")
 
         with ResourceMonitor() as query_monitor:
@@ -875,7 +830,6 @@ class PaperBenchmarkRunner:
         }
         print(f"\n  Query phase resources: Avg CPU={self.results['query_resources']['avg_cpu_percent']:.1f}%, Peak Mem={self.results['query_resources']['peak_memory_mb']:.1f} MB")
         
-        # Calculate recall (from last run)
         self.print_section("STEP 5: RECALL CALCULATION")
         self.results['recall'] = self.calculate_recall(self.results['runs'][-1])
         
@@ -885,16 +839,13 @@ class PaperBenchmarkRunner:
         else:
             print("  [SKIP] No ground truth available")
 
-        # Concurrent load test
         if not self.skip_concurrent:
             self.run_concurrent_benchmark(milvus_exec, weaviate_exec)
         else:
             print("\n[SKIP] Concurrent load test (--skip-concurrent)")
 
-        # Generate report
         self.generate_report()
         
-        # Cleanup
         try:
             if weaviate_loader and weaviate_loader.client:
                 weaviate_loader.client.close()
@@ -957,7 +908,6 @@ Examples:
 
     args = parser.parse_args()
     
-    # Create config
     index_config = IndexConfig(
         M=args.M,
         efConstruction=args.ef_construction,
@@ -973,11 +923,9 @@ Examples:
         index_config=index_config
     )
     
-    # Deployment and concurrent config
     deploy_config = get_deployment_config(args.mode)
     concurrent_clients = [int(x) for x in args.concurrent_clients.split(',')]
 
-    # Run benchmark
     runner = PaperBenchmarkRunner(
         config,
         deploy_config=deploy_config,
@@ -986,7 +934,6 @@ Examples:
     )
     runner.run()
     
-    # Optional: ef sweep
     if args.sweep_ef:
         print("\n\n[INFO] Running ef sweep - this requires re-using the loaded data")
 

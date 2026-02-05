@@ -1,0 +1,52 @@
+================================================================================
+PAPER-QUALITY VECTOR DATABASE BENCHMARK: MILVUS vs WEAVIATE
+================================================================================
+
+Date: 2026-01-18 16:02:12
+Dataset: fashion-mnist-784 (60,000 vectors, 784D)
+Number of runs: 1
+Index configuration: HNSW(M=16, efConstruction=200, ef=200)
+Warm-up queries: 50
+
+--------------------------------------------------------------------------------
+DATA LOADING PERFORMANCE
+--------------------------------------------------------------------------------
+
+Milvus:
+  Load Time: 102.3 seconds
+  Peak Memory: 462.8 MB
+  Index Config: HNSW(M=16, efConstruction=200, ef=200)
+
+Weaviate:
+  Load Time: 185.3 seconds
+  Peak Memory: 304.4 MB
+  Index Config: HNSW(M=16, efConstruction=200, ef=200)
+
+--------------------------------------------------------------------------------
+QUERY PERFORMANCE (mean ± std over 1 runs)
+--------------------------------------------------------------------------------
+
+Database   K    P50 (ms)    P95 (ms)         QPS
+  Milvus  10 4.86 ± 0.00 7.62 ± 0.00 194.3 ± 0.0
+Weaviate  10 3.69 ± 0.00 7.83 ± 0.00 228.2 ± 0.0
+  Milvus 100 5.14 ± 0.00 9.10 ± 0.00 185.2 ± 0.0
+Weaviate 100 5.59 ± 0.00 8.60 ± 0.00 169.9 ± 0.0
+
+--------------------------------------------------------------------------------
+RECALL@K ACCURACY
+--------------------------------------------------------------------------------
+
+Recall@10: Milvus=1.0000, Weaviate=0.5550
+Recall@100: Milvus=0.9996, Weaviate=0.5382
+
+================================================================================
+METHODOLOGY NOTE
+================================================================================
+
+This benchmark uses IDENTICAL index parameters for both databases:
+  - HNSW M: 16
+  - efConstruction: 200
+  - Search ef: 200
+  - Warm-up queries: 50
+  - Test queries: 100
+  - Runs: 1 (mean ± std reported)

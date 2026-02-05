@@ -1,1546 +1,594 @@
-"""
-Streamlit Dashboard: Milvus vs Weaviate Benchmark Results
-=========================================================
-
-Interactive visualization of vector database benchmark results.
-Parses complete_benchmark_*.txt files for all data.
-
-Usage:
-    streamlit run streamlit_app.py
-"""
-
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pathlib import Path
-import re
-import os
-from datetime import datetime
-from openai import OpenAI
-from dotenv import load_dotenv
+import json
 
-# Load environment variables
-load_dotenv()
-
-# Page configuration
 st.set_page_config(
     page_title="Milvus vs Weaviate Benchmark",
-    page_icon="🔍",
+    page_icon="",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Custom CSS
+MILVUS_COLOR = '#2E86AB'
+WEAVIATE_COLOR = '#E94F37'
+COLORS = {'Milvus': MILVUS_COLOR, 'Weaviate': WEAVIATE_COLOR}
+
+CURATED_FILES = {
+    'fashion-mnist-784':  'paper_benchmark_20260201_210904.json',
+    'gist1m':             'paper_benchmark_20260201_163717.json',
+    'sift1m':             'paper_benchmark_20260201_184237.json',
+    'glove-25':           'paper_benchmark_20260201_195809.json',
+    'glove-100':          'paper_benchmark_20260201_230242.json',
+    'glove-200':          'paper_benchmark_20260202_085252.json',
+    'nytimes-256':        'paper_benchmark_20260201_215039.json',
+    'deep-image-96-2M':   'paper_benchmark_20260205_143205.json',
+    'deep-image-96-5M':   'paper_benchmark_20260205_184103.json',
+}
+
+DATASET_META = {
+    'fashion-mnist-784':  {'vectors': 60000,   'dim': 784,  'metric': 'L2',     'label': 'F-MNIST 60K x 784'},
+    'gist1m':             {'vectors': 1000000, 'dim': 960,  'metric': 'L2',     'label': 'GIST 1M x 960'},
+    'sift1m':             {'vectors': 1000000, 'dim': 128,  'metric': 'L2',     'label': 'SIFT 1M x 128'},
+    'glove-25':           {'vectors': 1183514, 'dim': 25,   'metric': 'cosine', 'label': 'GloVe-25 1.2M x 25'},
+    'glove-100':          {'vectors': 1183514, 'dim': 100,  'metric': 'cosine', 'label': 'GloVe-100 1.2M x 100'},
+    'glove-200':          {'vectors': 1183514, 'dim': 200,  'metric': 'cosine', 'label': 'GloVe-200 1.2M x 200'},
+    'nytimes-256':        {'vectors': 290000,  'dim': 256,  'metric': 'cosine', 'label': 'NYTimes 290K x 256'},
+    'deep-image-96-2M':   {'vectors': 2000000, 'dim': 96,   'metric': 'L2',     'label': 'Deep-96 2M x 96'},
+    'deep-image-96-5M':   {'vectors': 5000000, 'dim': 96,   'metric': 'L2',     'label': 'Deep-96 5M x 96'},
+}
+
+DISPLAY_ORDER = [
+    'fashion-mnist-784', 'nytimes-256', 'glove-25', 'glove-100',
+    'glove-200', 'sift1m', 'gist1m', 'deep-image-96-2M', 'deep-image-96-5M',
+]
+
+
+@st.cache_data
+def load_all_results() -> dict:
+    results_dir = Path('results/paper')
+    data = {}
+    for ds_name, filename in CURATED_FILES.items():
+        path = results_dir / filename
+        if path.exists():
+            with open(path) as f:
+                data[ds_name] = json.load(f)
+    return data
+
+
+def get_agg(result: dict, k_key: str, db: str, field: str):
+    for entry in result.get('aggregated', []):
+        if entry.get('K') == k_key and entry.get('Database') == db:
+            return entry.get(field, 0)
+    return 0
+
+
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.5rem;
+        font-size: 2.2rem;
         font-weight: 700;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(90deg, #2E86AB 0%, #E94F37 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.3rem;
     }
     .sub-header {
         text-align: center;
         color: #666;
-        margin-bottom: 2rem;
-    }
-    .metric-card {
-        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-        padding: 1.5rem;
-        border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
-    .winner-badge {
-        background: linear-gradient(135deg, #00b894 0%, #00cec9 100%);
-        color: white;
-        padding: 0.3rem 0.8rem;
-        border-radius: 20px;
-        font-size: 0.8rem;
-        font-weight: bold;
-    }
-    .stMetric > div {
-        background-color: #f8f9fa;
-        padding: 1rem;
-        border-radius: 10px;
+        margin-bottom: 1.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
-
-# =============================================================================
-# PARSING FUNCTIONS
-# =============================================================================
-
-def get_benchmark_files():
-    """Get all complete_benchmark_*.txt files from results directory."""
-    results_dir = Path('results')
-    if not results_dir.exists():
-        return []
-    return sorted(results_dir.glob('complete_benchmark_*.txt'), reverse=True)
+PLOTLY_LAYOUT = dict(
+    plot_bgcolor='rgba(0,0,0,0)',
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    margin=dict(l=40, r=20, t=60, b=40),
+)
 
 
-def parse_benchmark_file(filepath):
-    """
-    Parse a complete_benchmark_*.txt file and extract all data.
-    
-    Returns a dict with all benchmark data.
-    """
-    data = {
-        'filepath': str(filepath),
-        'filename': filepath.name,
-        'timestamp': '',
-        'date': '',
-        'dataset': '',
-        'vectors': 0,
-        'dimensions': 0,
-        'loading': {
-            'Milvus': {'load_time': 0, 'peak_memory': 0},
-            'Weaviate': {'load_time': 0, 'peak_memory': 0}
-        },
-        'raw_data_size': 0,
-        'query_performance': None,  # DataFrame
-        'recall': None  # DataFrame
-    }
-    
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Extract timestamp from filename
-        ts_match = re.search(r'(\d{8}_\d{6})', filepath.name)
-        if ts_match:
-            ts = ts_match.group(1)
-            try:
-                dt = datetime.strptime(ts, '%Y%m%d_%H%M%S')
-                data['timestamp'] = dt.strftime('%Y-%m-%d %H:%M:%S')
-            except:
-                data['timestamp'] = ts
-        
-        # Extract date from content
-        date_match = re.search(r'Date:\s*(.+)', content)
-        if date_match:
-            data['date'] = date_match.group(1).strip()
-        
-        # Extract dataset info (handle names with hyphens like glove-200)
-        dataset_match = re.search(r'Dataset:\s*([\w-]+)\s*\(([0-9,]+)\s*vectors,\s*(\d+)D\)', content)
-        if dataset_match:
-            data['dataset'] = dataset_match.group(1)
-            data['vectors'] = int(dataset_match.group(2).replace(',', ''))
-            data['dimensions'] = int(dataset_match.group(3))
-        
-        # Extract Milvus loading stats
-        milvus_section = re.search(r'Milvus:\s*\n\s*Load Time:\s*([\d.]+)\s*seconds\s*\n\s*Peak Memory:\s*([\d.]+)\s*MB', content)
-        if milvus_section:
-            data['loading']['Milvus']['load_time'] = float(milvus_section.group(1))
-            data['loading']['Milvus']['peak_memory'] = float(milvus_section.group(2))
-        
-        # Extract Weaviate loading stats
-        weaviate_section = re.search(r'Weaviate:\s*\n\s*Load Time:\s*([\d.]+)\s*seconds\s*\n\s*Peak Memory:\s*([\d.]+)\s*MB', content)
-        if weaviate_section:
-            data['loading']['Weaviate']['load_time'] = float(weaviate_section.group(1))
-            data['loading']['Weaviate']['peak_memory'] = float(weaviate_section.group(2))
-        
-        # Extract raw data size
-        size_match = re.search(r'Raw Data Size:\s*([\d.]+)\s*MB', content)
-        if size_match:
-            data['raw_data_size'] = float(size_match.group(1))
-        
-        # Extract query performance table
-        perf_match = re.search(r'QUERY PERFORMANCE\s*-+\s*\n\s*\n(.+?)(?=\n-{10,}|\n={10,}|$)', content, re.DOTALL)
-        if perf_match:
-            table_text = perf_match.group(1).strip()
-            lines = [l.strip() for l in table_text.split('\n') if l.strip()]
-            
-            if len(lines) >= 2:
-                perf_data = []
-                for line in lines[1:]:  # Skip header
-                    parts = line.split()
-                    if len(parts) >= 7:
-                        try:
-                            row = {
-                                'Database': parts[1],
-                                'Test': parts[2],
-                                'P50 (ms)': float(parts[3]),
-                                'P95 (ms)': float(parts[4]),
-                                'P99 (ms)': float(parts[5]),
-                                'Mean (ms)': float(parts[6]),
-                                'QPS': float(parts[7]) if len(parts) > 7 else 0
-                            }
-                            perf_data.append(row)
-                        except (ValueError, IndexError):
-                            continue
-                
-                if perf_data:
-                    data['query_performance'] = pd.DataFrame(perf_data)
-        
-        # Extract recall data
-        recall_matches = re.findall(r'Recall@(\d+):\s*Milvus=([\d.]+),\s*Weaviate=([\d.]+)', content)
-        if recall_matches:
-            recall_data = []
-            for k, m, w in recall_matches:
-                recall_data.append({
-                    'K': int(k),
-                    'Milvus': float(m),
-                    'Weaviate': float(w)
-                })
-            data['recall'] = pd.DataFrame(recall_data)
-    
-    except Exception as e:
-        st.error(f"Error parsing {filepath}: {e}")
-    
-    return data
-
-
-# =============================================================================
-# CHART FUNCTIONS
-# =============================================================================
-
-def create_loading_time_chart(benchmark):
-    """Create a horizontal bar chart comparing load times."""
-    load_data = {
-        'Database': ['Milvus', 'Weaviate'],
-        'Load Time (s)': [
-            benchmark['loading']['Milvus']['load_time'],
-            benchmark['loading']['Weaviate']['load_time']
-        ]
-    }
-    df = pd.DataFrame(load_data)
-    
+def _bar_pair(datasets, m_vals, w_vals, title, yaxis, height=420, log_y=False):
+    labels = [DATASET_META[d]['label'] for d in datasets]
     fig = go.Figure()
-    
-    colors = ['#667eea', '#e17055']
-    
-    for i, row in df.iterrows():
-        fig.add_trace(go.Bar(
-            y=[row['Database']],
-            x=[row['Load Time (s)']],
-            orientation='h',
-            name=row['Database'],
-            marker_color=colors[i],
-            text=[f"{row['Load Time (s)']:.1f}s"],
-            textposition='auto',
-        ))
-    
-    fig.update_layout(
-        title="⏱️ Data Loading Time",
-        xaxis_title="Time (seconds)",
-        yaxis_title="",
-        showlegend=False,
-        height=250,
-        margin=dict(l=20, r=20, t=50, b=20),
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    
+    fig.add_trace(go.Bar(name='Milvus', x=labels, y=m_vals, marker_color=MILVUS_COLOR,
+                         text=[f"{v:.1f}" for v in m_vals], textposition='outside'))
+    fig.add_trace(go.Bar(name='Weaviate', x=labels, y=w_vals, marker_color=WEAVIATE_COLOR,
+                         text=[f"{v:.1f}" for v in w_vals], textposition='outside'))
+    fig.update_layout(title=title, yaxis_title=yaxis, barmode='group', height=height, **PLOTLY_LAYOUT)
+    if log_y:
+        fig.update_yaxes(type='log')
     return fig
 
+def chart_loading(results, datasets):
+    m_time = [results[d]['loading']['Milvus']['load_time_seconds'] for d in datasets]
+    w_time = [results[d]['loading']['Weaviate']['load_time_seconds'] for d in datasets]
+    n_vecs = [DATASET_META[d]['vectors'] for d in datasets]
+    m_tput = [n / t for n, t in zip(n_vecs, m_time)]
+    w_tput = [n / t for n, t in zip(n_vecs, w_time)]
 
-def create_memory_chart(benchmark):
-    """Create a horizontal bar chart comparing peak memory usage."""
-    mem_data = {
-        'Database': ['Milvus', 'Weaviate'],
-        'Peak Memory (MB)': [
-            benchmark['loading']['Milvus']['peak_memory'],
-            benchmark['loading']['Weaviate']['peak_memory']
-        ]
-    }
-    df = pd.DataFrame(mem_data)
-    
+    fig1 = _bar_pair(datasets, m_time, w_time, 'Data Loading Time', 'Time (seconds)', log_y=True)
+    fig2 = _bar_pair(datasets, m_tput, w_tput, 'Loading Throughput', 'Vectors / sec')
+    return fig1, fig2
+
+
+def chart_query_latency(results, datasets):
+    figs = []
+    for k_key, title in [('k10', 'Query Latency K=10'), ('k100', 'Query Latency K=100')]:
+        labels = [DATASET_META[d]['label'] for d in datasets]
+        m_p50 = [get_agg(results[d], k_key, 'Milvus', 'P50_mean') for d in datasets]
+        m_std = [get_agg(results[d], k_key, 'Milvus', 'P50_std') for d in datasets]
+        w_p50 = [get_agg(results[d], k_key, 'Weaviate', 'P50_mean') for d in datasets]
+        w_std = [get_agg(results[d], k_key, 'Weaviate', 'P50_std') for d in datasets]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name='Milvus', x=labels, y=m_p50, error_y=dict(type='data', array=m_std),
+                             marker_color=MILVUS_COLOR))
+        fig.add_trace(go.Bar(name='Weaviate', x=labels, y=w_p50, error_y=dict(type='data', array=w_std),
+                             marker_color=WEAVIATE_COLOR))
+        fig.update_layout(title=title, yaxis_title='P50 Latency (ms)', barmode='group',
+                          height=420, **PLOTLY_LAYOUT)
+        fig.update_yaxes(rangemode='tozero')
+        figs.append(fig)
+    return figs
+
+
+def chart_filter_impact(results, datasets):
+    labels = [DATASET_META[d]['label'] for d in datasets]
+    series = [
+        ('Milvus',          'k10',        'Milvus',   MILVUS_COLOR,  1.0),
+        ('Milvus+filter',   'k10_filter', 'Milvus',   MILVUS_COLOR,  0.5),
+        ('Weaviate',        'k10',        'Weaviate', WEAVIATE_COLOR, 1.0),
+        ('Weaviate+filter', 'k10_filter', 'Weaviate', WEAVIATE_COLOR, 0.5),
+    ]
     fig = go.Figure()
-    
-    colors = ['#667eea', '#e17055']
-    
-    for i, row in df.iterrows():
-        fig.add_trace(go.Bar(
-            y=[row['Database']],
-            x=[row['Peak Memory (MB)']],
-            orientation='h',
-            name=row['Database'],
-            marker_color=colors[i],
-            text=[f"{row['Peak Memory (MB)']:.1f} MB"],
-            textposition='auto',
-        ))
-    
-    fig.update_layout(
-        title="💾 Peak Memory Usage",
-        xaxis_title="Memory (MB)",
-        yaxis_title="",
-        showlegend=False,
-        height=250,
-        margin=dict(l=20, r=20, t=50, b=20),
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    
+    for label, k_key, db, color, opacity in series:
+        vals = [get_agg(results[d], k_key, db, 'P50_mean') for d in datasets]
+        fig.add_trace(go.Bar(name=label, x=labels, y=vals, marker_color=color,
+                             opacity=opacity,
+                             text=[f"{v:.1f}" for v in vals], textposition='outside'))
+    fig.update_layout(title='Filter Impact on Latency (K=10)', yaxis_title='P50 Latency (ms)',
+                      barmode='group', height=450, **PLOTLY_LAYOUT)
+    fig.update_yaxes(rangemode='tozero')
     return fig
 
 
-def create_latency_comparison_chart(perf_df):
-    """Create grouped bar chart comparing P50/P95/P99 latencies."""
-    if perf_df is None or perf_df.empty:
+def chart_recall(results, datasets):
+    datasets_with_recall = [d for d in datasets if results[d].get('recall')]
+    if not datasets_with_recall:
+        return None, None
+
+    figs = []
+    for k_str, title in [('k10', 'Recall@10'), ('k100', 'Recall@100')]:
+        labels = [DATASET_META[d]['label'] for d in datasets_with_recall]
+        m_vals = [results[d]['recall'].get(k_str, {}).get('Milvus', 0) for d in datasets_with_recall]
+        w_vals = [results[d]['recall'].get(k_str, {}).get('Weaviate', 0) for d in datasets_with_recall]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name='Milvus', x=labels, y=m_vals, marker_color=MILVUS_COLOR,
+                             text=[f"{v:.2f}" for v in m_vals], textposition='outside'))
+        fig.add_trace(go.Bar(name='Weaviate', x=labels, y=w_vals, marker_color=WEAVIATE_COLOR,
+                             text=[f"{v:.2f}" for v in w_vals], textposition='outside'))
+        fig.update_layout(title=title, yaxis_title='Recall', barmode='group', height=420, **PLOTLY_LAYOUT)
+        fig.update_yaxes(range=[0, 1.08])
+        figs.append(fig)
+    return figs
+
+
+def chart_concurrent(results, datasets):
+    candidates = [d for d in datasets if results[d].get('concurrent')]
+    if not candidates:
         return None
-    
-    # Filter to no-filter tests for cleaner comparison
-    df = perf_df[perf_df['Test'].str.contains('nofilter')].copy()
-    
-    fig = go.Figure()
-    
-    milvus_df = df[df['Database'] == 'Milvus']
-    weaviate_df = df[df['Database'] == 'Weaviate']
-    
-    tests = milvus_df['Test'].tolist()
-    test_labels = [t.replace('_nofilter', '').upper() for t in tests]
-    
-    fig.add_trace(go.Bar(
-        name='Milvus P50',
-        x=test_labels,
-        y=milvus_df['P50 (ms)'].tolist(),
-        marker_color='#667eea',
-        text=[f"{v:.1f}" for v in milvus_df['P50 (ms)']],
-        textposition='outside',
-    ))
-    
-    fig.add_trace(go.Bar(
-        name='Weaviate P50',
-        x=test_labels,
-        y=weaviate_df['P50 (ms)'].tolist(),
-        marker_color='#e17055',
-        text=[f"{v:.1f}" for v in weaviate_df['P50 (ms)']],
-        textposition='outside',
-    ))
-    
-    fig.update_layout(
-        title="⚡ Query Latency (P50) - Lower is Better",
-        xaxis_title="Query Type",
-        yaxis_title="Latency (ms)",
-        barmode='group',
-        height=400,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    
-    return fig
 
+    fig = make_subplots(rows=1, cols=len(candidates),
+                        subplot_titles=[DATASET_META[d]['label'] for d in candidates],
+                        horizontal_spacing=0.08)
 
-def create_qps_chart(perf_df):
-    """Create bar chart comparing QPS (throughput)."""
-    if perf_df is None or perf_df.empty:
-        return None
-    
-    df = perf_df[perf_df['Test'].str.contains('nofilter')].copy()
-    
-    fig = go.Figure()
-    
-    milvus_df = df[df['Database'] == 'Milvus']
-    weaviate_df = df[df['Database'] == 'Weaviate']
-    
-    tests = milvus_df['Test'].tolist()
-    test_labels = [t.replace('_nofilter', '').upper() for t in tests]
-    
-    fig.add_trace(go.Bar(
-        name='Milvus',
-        x=test_labels,
-        y=milvus_df['QPS'].tolist(),
-        marker_color='#667eea',
-        text=[f"{v:.0f}" for v in milvus_df['QPS']],
-        textposition='outside',
-    ))
-    
-    fig.add_trace(go.Bar(
-        name='Weaviate',
-        x=test_labels,
-        y=weaviate_df['QPS'].tolist(),
-        marker_color='#e17055',
-        text=[f"{v:.0f}" for v in weaviate_df['QPS']],
-        textposition='outside',
-    ))
-    
-    fig.update_layout(
-        title="🚀 Throughput (QPS) - Higher is Better",
-        xaxis_title="Query Type",
-        yaxis_title="Queries per Second",
-        barmode='group',
-        height=400,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    
-    return fig
-
-
-def create_latency_heatmap(perf_df):
-    """Create heatmap showing all latency metrics."""
-    if perf_df is None or perf_df.empty:
-        return None
-    
-    metrics = ['P50 (ms)', 'P95 (ms)', 'P99 (ms)']
-    
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=('Milvus Latencies', 'Weaviate Latencies'),
-        horizontal_spacing=0.15
-    )
-    
-    for idx, db in enumerate(['Milvus', 'Weaviate']):
-        df_db = perf_df[perf_df['Database'] == db]
-        
-        z_data = df_db[metrics].values
-        x_labels = ['P50', 'P95', 'P99']
-        y_labels = df_db['Test'].tolist()
-        
-        fig.add_trace(
-            go.Heatmap(
-                z=z_data,
-                x=x_labels,
-                y=y_labels,
-                colorscale='RdYlGn_r',
-                showscale=(idx == 1),
-                text=[[f"{v:.1f}" for v in row] for row in z_data],
-                texttemplate="%{text}",
-                textfont={"size": 10},
-            ),
-            row=1, col=idx+1
-        )
-    
-    fig.update_layout(
-        title="📊 Latency Heatmap (ms) - Cooler Colors = Faster",
-        height=400,
-        margin=dict(l=20, r=20, t=80, b=20),
-    )
-    
-    return fig
-
-
-def create_recall_chart(recall_df):
-    """Create line chart comparing recall@K."""
-    if recall_df is None or recall_df.empty:
-        return None
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=recall_df['K'],
-        y=recall_df['Milvus'],
-        mode='lines+markers+text',
-        name='Milvus',
-        line=dict(color='#667eea', width=3),
-        marker=dict(size=10),
-        text=[f"{v:.2%}" for v in recall_df['Milvus']],
-        textposition='top center',
-    ))
-    
-    fig.add_trace(go.Scatter(
-        x=recall_df['K'],
-        y=recall_df['Weaviate'],
-        mode='lines+markers+text',
-        name='Weaviate',
-        line=dict(color='#e17055', width=3),
-        marker=dict(size=10),
-        text=[f"{v:.2%}" for v in recall_df['Weaviate']],
-        textposition='bottom center',
-    ))
-    
-    fig.update_layout(
-        title="🎯 Recall@K (Search Accuracy) - Higher is Better",
-        xaxis_title="K (Top-K Results)",
-        yaxis_title="Recall",
-        yaxis=dict(range=[0, 1.05], tickformat='.0%'),
-        height=400,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    
-    return fig
-
-
-def create_radar_chart(benchmark):
-    """Create radar chart for overall comparison."""
-    perf_df = benchmark['query_performance']
-    recall_df = benchmark['recall']
-    
-    if perf_df is None:
-        return None
-    
-    milvus_scores = []
-    weaviate_scores = []
-    categories = []
-    
-    # Load time (lower is better, invert)
-    m_load = benchmark['loading']['Milvus']['load_time']
-    w_load = benchmark['loading']['Weaviate']['load_time']
-    max_load = max(m_load, w_load)
-    if max_load > 0:
-        milvus_scores.append((1 - m_load/max_load) * 100)
-        weaviate_scores.append((1 - w_load/max_load) * 100)
-        categories.append('Load Speed')
-    
-    # Memory (lower is better, invert)
-    m_mem = benchmark['loading']['Milvus']['peak_memory']
-    w_mem = benchmark['loading']['Weaviate']['peak_memory']
-    max_mem = max(m_mem, w_mem)
-    if max_mem > 0:
-        milvus_scores.append((1 - m_mem/max_mem) * 100)
-        weaviate_scores.append((1 - w_mem/max_mem) * 100)
-        categories.append('Memory Efficiency')
-    
-    # P50 Latency for k10 (lower is better, invert)
-    m_p50 = perf_df[(perf_df['Database'] == 'Milvus') & (perf_df['Test'] == 'k10_nofilter')]['P50 (ms)'].values
-    w_p50 = perf_df[(perf_df['Database'] == 'Weaviate') & (perf_df['Test'] == 'k10_nofilter')]['P50 (ms)'].values
-    if len(m_p50) > 0 and len(w_p50) > 0:
-        max_p50 = max(m_p50[0], w_p50[0])
-        if max_p50 > 0:
-            milvus_scores.append((1 - m_p50[0]/max_p50) * 100)
-            weaviate_scores.append((1 - w_p50[0]/max_p50) * 100)
-            categories.append('Query Speed')
-    
-    # QPS for k10 (higher is better)
-    m_qps = perf_df[(perf_df['Database'] == 'Milvus') & (perf_df['Test'] == 'k10_nofilter')]['QPS'].values
-    w_qps = perf_df[(perf_df['Database'] == 'Weaviate') & (perf_df['Test'] == 'k10_nofilter')]['QPS'].values
-    if len(m_qps) > 0 and len(w_qps) > 0:
-        max_qps = max(m_qps[0], w_qps[0])
-        if max_qps > 0:
-            milvus_scores.append((m_qps[0]/max_qps) * 100)
-            weaviate_scores.append((w_qps[0]/max_qps) * 100)
-            categories.append('Throughput')
-    
-    # Recall@10 (higher is better)
-    if recall_df is not None and not recall_df.empty:
-        r10 = recall_df[recall_df['K'] == 10]
-        if not r10.empty:
-            milvus_scores.append(r10['Milvus'].values[0] * 100)
-            weaviate_scores.append(r10['Weaviate'].values[0] * 100)
-            categories.append('Accuracy')
-    
-    if not categories:
-        return None
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatterpolar(
-        r=milvus_scores + [milvus_scores[0]],
-        theta=categories + [categories[0]],
-        fill='toself',
-        name='Milvus',
-        line_color='#667eea',
-        fillcolor='rgba(102, 126, 234, 0.3)',
-    ))
-    
-    fig.add_trace(go.Scatterpolar(
-        r=weaviate_scores + [weaviate_scores[0]],
-        theta=categories + [categories[0]],
-        fill='toself',
-        name='Weaviate',
-        line_color='#e17055',
-        fillcolor='rgba(225, 112, 85, 0.3)',
-    ))
-    
-    fig.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, 100])
-        ),
-        showlegend=True,
-        title="🏆 Overall Performance Comparison",
-        height=450,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-    )
-    
-    return fig
-
-
-def create_filter_impact_chart(perf_df):
-    """Create chart showing impact of filters on performance."""
-    if perf_df is None or perf_df.empty:
-        return None
-    
-    has_filters = perf_df['Test'].str.contains('filter').any()
-    if not has_filters:
-        return None
-    
-    fig = go.Figure()
-    
-    for db, color in [('Milvus', '#667eea'), ('Weaviate', '#e17055')]:
-        df_db = perf_df[perf_df['Database'] == db]
-        
-        tests = ['k10_nofilter', 'k10_filter', 'k100_nofilter', 'k100_filter']
-        labels = ['K10', 'K10+Filter', 'K100', 'K100+Filter']
-        
-        values = []
-        for t in tests:
-            row = df_db[df_db['Test'] == t]
-            if not row.empty:
-                values.append(row['P50 (ms)'].values[0])
-            else:
-                values.append(0)
-        
-        fig.add_trace(go.Bar(
-            name=db,
-            x=labels,
-            y=values,
-            marker_color=color,
-            text=[f"{v:.1f}" for v in values],
-            textposition='outside',
-        ))
-    
-    fig.update_layout(
-        title="🔍 Filter Impact on Latency",
-        xaxis_title="Query Configuration",
-        yaxis_title="P50 Latency (ms)",
-        barmode='group',
-        height=400,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    
-    return fig
-
-
-# =============================================================================
-# TOTAL ANALYSIS CHARTS (Cross-benchmark)
-# =============================================================================
-
-def create_load_time_comparison_all(benchmarks):
-    """Bar chart comparing load times across all datasets."""
-    data = []
-    for b in benchmarks:
-        if b['dataset']:
-            data.append({'Dataset': b['dataset'], 'Database': 'Milvus', 'Load Time (s)': b['loading']['Milvus']['load_time']})
-            data.append({'Dataset': b['dataset'], 'Database': 'Weaviate', 'Load Time (s)': b['loading']['Weaviate']['load_time']})
-    
-    if not data:
-        return None
-    
-    df = pd.DataFrame(data)
-    
-    fig = px.bar(
-        df, x='Dataset', y='Load Time (s)', color='Database',
-        barmode='group',
-        color_discrete_map={'Milvus': '#667eea', 'Weaviate': '#e17055'},
-        text='Load Time (s)'
-    )
-    
-    fig.update_traces(texttemplate='%{text:.1f}s', textposition='outside')
-    fig.update_layout(
-        title="⏱️ Load Time Comparison Across All Datasets",
-        height=400,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    
-    return fig
-
-
-def create_memory_comparison_all(benchmarks):
-    """Bar chart comparing memory usage across all datasets."""
-    data = []
-    for b in benchmarks:
-        if b['dataset']:
-            data.append({'Dataset': b['dataset'], 'Database': 'Milvus', 'Peak Memory (MB)': b['loading']['Milvus']['peak_memory']})
-            data.append({'Dataset': b['dataset'], 'Database': 'Weaviate', 'Peak Memory (MB)': b['loading']['Weaviate']['peak_memory']})
-    
-    if not data:
-        return None
-    
-    df = pd.DataFrame(data)
-    
-    fig = px.bar(
-        df, x='Dataset', y='Peak Memory (MB)', color='Database',
-        barmode='group',
-        color_discrete_map={'Milvus': '#667eea', 'Weaviate': '#e17055'},
-        text='Peak Memory (MB)'
-    )
-    
-    fig.update_traces(texttemplate='%{text:.0f}', textposition='outside')
-    fig.update_layout(
-        title="💾 Peak Memory Usage Across All Datasets",
-        height=400,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    
-    return fig
-
-
-def create_scalability_chart(benchmarks):
-    """Scatter plot showing how performance scales with dataset size."""
-    data = []
-    for b in benchmarks:
-        if b['dataset'] and b['query_performance'] is not None:
-            # Get k10 no filter P50
-            perf = b['query_performance']
-            m_row = perf[(perf['Database'] == 'Milvus') & (perf['Test'] == 'k10_nofilter')]
-            w_row = perf[(perf['Database'] == 'Weaviate') & (perf['Test'] == 'k10_nofilter')]
-            
-            if not m_row.empty:
-                data.append({
-                    'Dataset': b['dataset'],
-                    'Vectors': b['vectors'],
-                    'Database': 'Milvus',
-                    'P50 Latency (ms)': m_row['P50 (ms)'].values[0]
-                })
-            if not w_row.empty:
-                data.append({
-                    'Dataset': b['dataset'],
-                    'Vectors': b['vectors'],
-                    'Database': 'Weaviate',
-                    'P50 Latency (ms)': w_row['P50 (ms)'].values[0]
-                })
-    
-    if not data:
-        return None
-    
-    df = pd.DataFrame(data)
-    
-    fig = px.scatter(
-        df, x='Vectors', y='P50 Latency (ms)', color='Database',
-        size='P50 Latency (ms)',
-        hover_data=['Dataset'],
-        color_discrete_map={'Milvus': '#667eea', 'Weaviate': '#e17055'},
-    )
-    
-    # Add trend lines
-    for db, color in [('Milvus', '#667eea'), ('Weaviate', '#e17055')]:
-        df_db = df[df['Database'] == db].sort_values('Vectors')
-        if len(df_db) > 1:
-            fig.add_trace(go.Scatter(
-                x=df_db['Vectors'],
-                y=df_db['P50 Latency (ms)'],
-                mode='lines',
-                name=f'{db} trend',
-                line=dict(color=color, dash='dash', width=2),
-                showlegend=False
-            ))
-    
-    fig.update_layout(
-        title="📈 Scalability: Latency vs Dataset Size (K10 queries)",
-        xaxis_title="Number of Vectors",
-        yaxis_title="P50 Latency (ms)",
-        height=450,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    
-    return fig
-
-
-def create_qps_scalability_chart(benchmarks):
-    """Line chart showing QPS across different dataset sizes."""
-    data = []
-    for b in benchmarks:
-        if b['dataset'] and b['query_performance'] is not None:
-            perf = b['query_performance']
-            m_row = perf[(perf['Database'] == 'Milvus') & (perf['Test'] == 'k10_nofilter')]
-            w_row = perf[(perf['Database'] == 'Weaviate') & (perf['Test'] == 'k10_nofilter')]
-            
-            if not m_row.empty:
-                data.append({
-                    'Dataset': b['dataset'],
-                    'Vectors': b['vectors'],
-                    'Database': 'Milvus',
-                    'QPS': m_row['QPS'].values[0]
-                })
-            if not w_row.empty:
-                data.append({
-                    'Dataset': b['dataset'],
-                    'Vectors': b['vectors'],
-                    'Database': 'Weaviate',
-                    'QPS': w_row['QPS'].values[0]
-                })
-    
-    if not data:
-        return None
-    
-    df = pd.DataFrame(data)
-    
-    fig = go.Figure()
-    
-    for db, color in [('Milvus', '#667eea'), ('Weaviate', '#e17055')]:
-        df_db = df[df['Database'] == db].sort_values('Vectors')
-        fig.add_trace(go.Scatter(
-            x=df_db['Dataset'],
-            y=df_db['QPS'],
-            mode='lines+markers+text',
-            name=db,
-            line=dict(color=color, width=3),
-            marker=dict(size=12),
-            text=[f"{v:.0f}" for v in df_db['QPS']],
-            textposition='top center',
-        ))
-    
-    fig.update_layout(
-        title="🚀 Throughput (QPS) Across Datasets",
-        xaxis_title="Dataset",
-        yaxis_title="Queries per Second",
-        height=400,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    
-    return fig
-
-
-def create_recall_comparison_all(benchmarks):
-    """Compare Recall@10 across all datasets that have recall data."""
-    data = []
-    for b in benchmarks:
-        if b['dataset'] and b['recall'] is not None:
-            r10 = b['recall'][b['recall']['K'] == 10]
-            if not r10.empty:
-                data.append({
-                    'Dataset': b['dataset'],
-                    'Database': 'Milvus',
-                    'Recall@10': r10['Milvus'].values[0]
-                })
-                data.append({
-                    'Dataset': b['dataset'],
-                    'Database': 'Weaviate',
-                    'Recall@10': r10['Weaviate'].values[0]
-                })
-    
-    if not data:
-        return None
-    
-    df = pd.DataFrame(data)
-    
-    fig = px.bar(
-        df, x='Dataset', y='Recall@10', color='Database',
-        barmode='group',
-        color_discrete_map={'Milvus': '#667eea', 'Weaviate': '#e17055'},
-        text='Recall@10'
-    )
-    
-    fig.update_traces(texttemplate='%{text:.2%}', textposition='outside')
-    fig.update_layout(
-        title="🎯 Recall@10 Accuracy Across Datasets",
-        yaxis=dict(range=[0, 1.1], tickformat='.0%'),
-        height=400,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    
-    return fig
-
-
-def create_win_rate_chart(benchmarks):
-    """Pie charts showing win rates across all benchmarks."""
-    wins = {'Milvus': {'load_time': 0, 'memory': 0, 'latency': 0, 'qps': 0, 'recall': 0},
-            'Weaviate': {'load_time': 0, 'memory': 0, 'latency': 0, 'qps': 0, 'recall': 0}}
-    
-    for b in benchmarks:
-        if not b['dataset']:
-            continue
-        
-        # Load time (lower is better)
-        if b['loading']['Milvus']['load_time'] < b['loading']['Weaviate']['load_time']:
-            wins['Milvus']['load_time'] += 1
-        else:
-            wins['Weaviate']['load_time'] += 1
-        
-        # Memory (lower is better)
-        if b['loading']['Milvus']['peak_memory'] < b['loading']['Weaviate']['peak_memory']:
-            wins['Milvus']['memory'] += 1
-        else:
-            wins['Weaviate']['memory'] += 1
-        
-        # Latency and QPS
-        if b['query_performance'] is not None:
-            perf = b['query_performance']
-            m_row = perf[(perf['Database'] == 'Milvus') & (perf['Test'] == 'k10_nofilter')]
-            w_row = perf[(perf['Database'] == 'Weaviate') & (perf['Test'] == 'k10_nofilter')]
-            
-            if not m_row.empty and not w_row.empty:
-                # Latency (lower is better)
-                if m_row['P50 (ms)'].values[0] < w_row['P50 (ms)'].values[0]:
-                    wins['Milvus']['latency'] += 1
-                else:
-                    wins['Weaviate']['latency'] += 1
-                
-                # QPS (higher is better)
-                if m_row['QPS'].values[0] > w_row['QPS'].values[0]:
-                    wins['Milvus']['qps'] += 1
-                else:
-                    wins['Weaviate']['qps'] += 1
-        
-        # Recall
-        if b['recall'] is not None:
-            r10 = b['recall'][b['recall']['K'] == 10]
-            if not r10.empty:
-                if r10['Milvus'].values[0] > r10['Weaviate'].values[0]:
-                    wins['Milvus']['recall'] += 1
-                else:
-                    wins['Weaviate']['recall'] += 1
-    
-    # Create subplot with pie charts
-    fig = make_subplots(
-        rows=1, cols=5,
-        specs=[[{'type': 'pie'}] * 5],
-        subplot_titles=['Load Time', 'Memory', 'Latency', 'Throughput', 'Accuracy']
-    )
-    
-    categories = ['load_time', 'memory', 'latency', 'qps', 'recall']
-    
-    for i, cat in enumerate(categories):
-        m_wins = wins['Milvus'][cat]
-        w_wins = wins['Weaviate'][cat]
-        
-        fig.add_trace(
-            go.Pie(
-                values=[m_wins, w_wins],
-                labels=['Milvus', 'Weaviate'],
-                marker_colors=['#667eea', '#e17055'],
-                textinfo='value',
-                showlegend=(i == 0),
-                hole=0.4,
-            ),
-            row=1, col=i+1
-        )
-    
-    fig.update_layout(
-        title="🏆 Win Rate by Category (across all benchmarks)",
-        height=300,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5),
-    )
-    
-    return fig, wins
-
-
-def create_overall_radar_all(benchmarks):
-    """Radar chart showing average performance across all benchmarks."""
-    metrics = {
-        'Milvus': {'load_speed': [], 'memory_eff': [], 'query_speed': [], 'throughput': [], 'accuracy': []},
-        'Weaviate': {'load_speed': [], 'memory_eff': [], 'query_speed': [], 'throughput': [], 'accuracy': []}
-    }
-    
-    for b in benchmarks:
-        if not b['dataset']:
-            continue
-        
-        m_load = b['loading']['Milvus']['load_time']
-        w_load = b['loading']['Weaviate']['load_time']
-        max_load = max(m_load, w_load, 0.001)
-        metrics['Milvus']['load_speed'].append((1 - m_load/max_load) * 100)
-        metrics['Weaviate']['load_speed'].append((1 - w_load/max_load) * 100)
-        
-        m_mem = b['loading']['Milvus']['peak_memory']
-        w_mem = b['loading']['Weaviate']['peak_memory']
-        max_mem = max(m_mem, w_mem, 0.001)
-        metrics['Milvus']['memory_eff'].append((1 - m_mem/max_mem) * 100)
-        metrics['Weaviate']['memory_eff'].append((1 - w_mem/max_mem) * 100)
-        
-        if b['query_performance'] is not None:
-            perf = b['query_performance']
-            m_row = perf[(perf['Database'] == 'Milvus') & (perf['Test'] == 'k10_nofilter')]
-            w_row = perf[(perf['Database'] == 'Weaviate') & (perf['Test'] == 'k10_nofilter')]
-            
-            if not m_row.empty and not w_row.empty:
-                max_p50 = max(m_row['P50 (ms)'].values[0], w_row['P50 (ms)'].values[0], 0.001)
-                metrics['Milvus']['query_speed'].append((1 - m_row['P50 (ms)'].values[0]/max_p50) * 100)
-                metrics['Weaviate']['query_speed'].append((1 - w_row['P50 (ms)'].values[0]/max_p50) * 100)
-                
-                max_qps = max(m_row['QPS'].values[0], w_row['QPS'].values[0], 0.001)
-                metrics['Milvus']['throughput'].append((m_row['QPS'].values[0]/max_qps) * 100)
-                metrics['Weaviate']['throughput'].append((w_row['QPS'].values[0]/max_qps) * 100)
-        
-        if b['recall'] is not None:
-            r10 = b['recall'][b['recall']['K'] == 10]
-            if not r10.empty:
-                metrics['Milvus']['accuracy'].append(r10['Milvus'].values[0] * 100)
-                metrics['Weaviate']['accuracy'].append(r10['Weaviate'].values[0] * 100)
-    
-    # Calculate averages
-    categories = ['Load Speed', 'Memory Efficiency', 'Query Speed', 'Throughput', 'Accuracy']
-    keys = ['load_speed', 'memory_eff', 'query_speed', 'throughput', 'accuracy']
-    
-    milvus_avg = []
-    weaviate_avg = []
-    valid_categories = []
-    
-    for cat, key in zip(categories, keys):
-        if metrics['Milvus'][key] and metrics['Weaviate'][key]:
-            milvus_avg.append(sum(metrics['Milvus'][key]) / len(metrics['Milvus'][key]))
-            weaviate_avg.append(sum(metrics['Weaviate'][key]) / len(metrics['Weaviate'][key]))
-            valid_categories.append(cat)
-    
-    if not valid_categories:
-        return None
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatterpolar(
-        r=milvus_avg + [milvus_avg[0]],
-        theta=valid_categories + [valid_categories[0]],
-        fill='toself',
-        name='Milvus (avg)',
-        line_color='#667eea',
-        fillcolor='rgba(102, 126, 234, 0.3)',
-    ))
-    
-    fig.add_trace(go.Scatterpolar(
-        r=weaviate_avg + [weaviate_avg[0]],
-        theta=valid_categories + [valid_categories[0]],
-        fill='toself',
-        name='Weaviate (avg)',
-        line_color='#e17055',
-        fillcolor='rgba(225, 112, 85, 0.3)',
-    ))
-    
-    fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-        title="🎯 Average Performance Across All Benchmarks",
-        height=450,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-    )
-    
-    return fig
-
-
-def create_summary_table(benchmarks):
-    """Create summary statistics table."""
-    data = []
-    for b in benchmarks:
-        if not b['dataset']:
-            continue
-        
-        row = {
-            'Dataset': b['dataset'],
-            'Vectors': f"{b['vectors']:,}",
-            'Dims': b['dimensions'],
-            'M Load (s)': f"{b['loading']['Milvus']['load_time']:.1f}",
-            'W Load (s)': f"{b['loading']['Weaviate']['load_time']:.1f}",
-            'M Mem (MB)': f"{b['loading']['Milvus']['peak_memory']:.0f}",
-            'W Mem (MB)': f"{b['loading']['Weaviate']['peak_memory']:.0f}",
-        }
-        
-        if b['query_performance'] is not None:
-            perf = b['query_performance']
-            m_row = perf[(perf['Database'] == 'Milvus') & (perf['Test'] == 'k10_nofilter')]
-            w_row = perf[(perf['Database'] == 'Weaviate') & (perf['Test'] == 'k10_nofilter')]
-            
-            if not m_row.empty:
-                row['M P50 (ms)'] = f"{m_row['P50 (ms)'].values[0]:.1f}"
-                row['M QPS'] = f"{m_row['QPS'].values[0]:.0f}"
-            if not w_row.empty:
-                row['W P50 (ms)'] = f"{w_row['P50 (ms)'].values[0]:.1f}"
-                row['W QPS'] = f"{w_row['QPS'].values[0]:.0f}"
-        
-        if b['recall'] is not None:
-            r10 = b['recall'][b['recall']['K'] == 10]
-            if not r10.empty:
-                row['M Recall'] = f"{r10['Milvus'].values[0]:.2%}"
-                row['W Recall'] = f"{r10['Weaviate'].values[0]:.2%}"
-        
-        data.append(row)
-    
-    return pd.DataFrame(data)
-
-
-def get_ai_recommendations_total(benchmarks, api_key):
-    """Generate AI recommendations based on ALL benchmarks."""
-    if not api_key:
-        return None
-    
-    try:
-        client = OpenAI(api_key=api_key)
-        
-        summary = "## Complete Benchmark Summary (All Datasets)\n\n"
-        
-        for b in benchmarks:
-            if not b['dataset']:
+    for col, ds in enumerate(candidates, 1):
+        conc = results[ds]['concurrent']
+        for db_key, db_name in [('milvus', 'Milvus'), ('weaviate', 'Weaviate')]:
+            entries = conc.get(db_key, [])
+            if not entries:
                 continue
-            
-            summary += f"### {b['dataset']} ({b['vectors']:,} vectors, {b['dimensions']}D)\n"
-            summary += f"- Load: Milvus {b['loading']['Milvus']['load_time']:.1f}s vs Weaviate {b['loading']['Weaviate']['load_time']:.1f}s\n"
-            summary += f"- Memory: Milvus {b['loading']['Milvus']['peak_memory']:.0f}MB vs Weaviate {b['loading']['Weaviate']['peak_memory']:.0f}MB\n"
-            
-            if b['query_performance'] is not None:
-                perf = b['query_performance']
-                m_row = perf[(perf['Database'] == 'Milvus') & (perf['Test'] == 'k10_nofilter')]
-                w_row = perf[(perf['Database'] == 'Weaviate') & (perf['Test'] == 'k10_nofilter')]
-                if not m_row.empty and not w_row.empty:
-                    summary += f"- P50 Latency (k10): Milvus {m_row['P50 (ms)'].values[0]:.1f}ms vs Weaviate {w_row['P50 (ms)'].values[0]:.1f}ms\n"
-                    summary += f"- QPS: Milvus {m_row['QPS'].values[0]:.0f} vs Weaviate {w_row['QPS'].values[0]:.0f}\n"
-            
-            if b['recall'] is not None:
-                r10 = b['recall'][b['recall']['K'] == 10]
-                if not r10.empty:
-                    summary += f"- Recall@10: Milvus {r10['Milvus'].values[0]:.2%} vs Weaviate {r10['Weaviate'].values[0]:.2%}\n"
-            
-            summary += "\n"
-        
-        prompt = f"""
-You are an expert in vector databases. Analyze these comprehensive benchmark results comparing Milvus and Weaviate across multiple datasets:
+            clients = [e['n_clients'] for e in entries]
+            qps = [e['qps'] for e in entries]
+            fig.add_trace(go.Scatter(
+                x=clients, y=qps, mode='lines+markers', name=db_name,
+                line=dict(color=COLORS[db_name], width=2),
+                marker=dict(size=8),
+                showlegend=(col == 1),
+            ), row=1, col=col)
+        fig.update_xaxes(title_text='Clients', row=1, col=col)
+        fig.update_yaxes(title_text='QPS' if col == 1 else '', row=1, col=col)
 
-{summary}
-
-Provide a comprehensive analysis:
-1. **Overall Trends** (3-4 bullet points about patterns you see across datasets)
-2. **Scalability Insights** (How do they perform as dataset size increases?)
-3. **Consistency Analysis** (Which database is more consistent across different scenarios?)
-4. **Final Verdict**: Choose Milvus if... (3-4 points) / Choose Weaviate if... (3-4 points)
-
-Be specific with numbers and percentages. Format in clean Markdown.
-"""
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a technical expert providing comprehensive database analysis. Be data-driven and specific."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=1000,
-            temperature=0.7
-        )
-        
-        return response.choices[0].message.content
-    
-    except Exception as e:
-        return f"Error: {str(e)}"
+    fig.update_layout(title='Concurrent Scaling: QPS vs Client Count',
+                      height=400, **PLOTLY_LAYOUT)
+    return fig
 
 
-# =============================================================================
-# AI RECOMMENDATIONS
-# =============================================================================
+def chart_dimensionality(results, datasets):
+    dim_ds = ['glove-25', 'glove-100', 'sift1m', 'glove-200', 'gist1m']
+    dim_ds = [d for d in dim_ds if d in results]
+    dims = sorted([(DATASET_META[d]['dim'], d) for d in dim_ds])
+    dim_ds = [d for _, d in dims]
+    dim_vals = [DATASET_META[d]['dim'] for d in dim_ds]
+    dim_labels = [DATASET_META[d]['label'] for d in dim_ds]
 
-def get_ai_recommendations(benchmark, api_key):
-    """Generate AI-powered recommendations based on benchmark data."""
-    if not api_key:
+    fig = make_subplots(rows=1, cols=2, subplot_titles=['K=10', 'K=100'], horizontal_spacing=0.1)
+
+    for col, k_key in enumerate(['k10', 'k100'], 1):
+        for db in ['Milvus', 'Weaviate']:
+            vals = [get_agg(results[d], k_key, db, 'P50_mean') for d in dim_ds]
+            fig.add_trace(go.Scatter(
+                x=dim_vals, y=vals, mode='lines+markers', name=db,
+                line=dict(color=COLORS[db], width=2), marker=dict(size=8),
+                showlegend=(col == 1),
+            ), row=1, col=col)
+        fig.update_xaxes(title_text='Dimensionality', row=1, col=col,
+                         tickvals=dim_vals, ticktext=dim_labels)
+        fig.update_yaxes(title_text='P50 Latency (ms)' if col == 1 else '', row=1, col=col,
+                         rangemode='tozero')
+
+    fig.update_layout(title='Latency vs Dimensionality (datasets ~1M vectors)',
+                      height=420, **PLOTLY_LAYOUT)
+    return fig
+
+
+def chart_scale(results, datasets):
+    scale_ds = ['fashion-mnist-784', 'sift1m', 'deep-image-96-2M', 'deep-image-96-5M']
+    scale_ds = [d for d in scale_ds if d in results]
+    sizes = [DATASET_META[d]['vectors'] for d in scale_ds]
+    scale_labels = [DATASET_META[d]['label'] for d in scale_ds]
+
+    fig = make_subplots(rows=1, cols=2, subplot_titles=['Latency vs Scale (K=10)', 'QPS vs Scale (K=10)'],
+                        horizontal_spacing=0.1)
+
+    for db in ['Milvus', 'Weaviate']:
+        p50 = [get_agg(results[d], 'k10', db, 'P50_mean') for d in scale_ds]
+        qps = [get_agg(results[d], 'k10', db, 'QPS_mean') for d in scale_ds]
+
+        fig.add_trace(go.Scatter(
+            x=sizes, y=p50, mode='lines+markers', name=db,
+            line=dict(color=COLORS[db], width=2), marker=dict(size=8),
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=sizes, y=qps, mode='lines+markers', name=db,
+            line=dict(color=COLORS[db], width=2), marker=dict(size=8),
+            showlegend=False,
+        ), row=1, col=2)
+
+    for col in [1, 2]:
+        fig.update_xaxes(type='log', title_text='Dataset Size', row=1, col=col,
+                         tickvals=sizes, ticktext=scale_labels)
+    fig.update_yaxes(title_text='P50 (ms)', rangemode='tozero', row=1, col=1)
+    fig.update_yaxes(title_text='QPS', rangemode='tozero', row=1, col=2)
+
+    fig.update_layout(title='Performance vs Dataset Scale', height=420, **PLOTLY_LAYOUT)
+    return fig
+
+
+def chart_resources(results, datasets):
+    m_cpu = [results[d]['loading']['Milvus'].get('avg_cpu_percent', 0) for d in datasets]
+    w_cpu = [results[d]['loading']['Weaviate'].get('avg_cpu_percent', 0) for d in datasets]
+    m_mem = [results[d]['loading']['Milvus'].get('peak_memory_mb', 0) for d in datasets]
+    w_mem = [results[d]['loading']['Weaviate'].get('peak_memory_mb', 0) for d in datasets]
+
+    fig1 = _bar_pair(datasets, m_cpu, w_cpu, 'Avg CPU During Loading', 'CPU Usage (%)')
+    fig2 = _bar_pair(datasets, m_mem, w_mem, 'Peak Memory During Loading', 'Memory (MB)')
+    return fig1, fig2
+
+def single_loading_chart(data, ds_name):
+    m = data['loading']['Milvus']
+    w = data['loading']['Weaviate']
+    metrics = ['Load Time (s)', 'Avg CPU (%)', 'Peak Memory (MB)', 'Disk Write (MB)']
+    m_vals = [m['load_time_seconds'], m.get('avg_cpu_percent', 0),
+              m.get('peak_memory_mb', 0), m.get('disk_write_mb', 0)]
+    w_vals = [w['load_time_seconds'], w.get('avg_cpu_percent', 0),
+              w.get('peak_memory_mb', 0), w.get('disk_write_mb', 0)]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name='Milvus', y=metrics, x=m_vals, orientation='h',
+                         marker_color=MILVUS_COLOR,
+                         text=[f"{v:.1f}" for v in m_vals], textposition='outside'))
+    fig.add_trace(go.Bar(name='Weaviate', y=metrics, x=w_vals, orientation='h',
+                         marker_color=WEAVIATE_COLOR,
+                         text=[f"{v:.1f}" for v in w_vals], textposition='outside'))
+    fig.update_layout(title=f'Loading Comparison: {DATASET_META[ds_name]["label"]}',
+                      barmode='group', height=350, **PLOTLY_LAYOUT)
+    return fig
+
+
+def single_latency_chart(data):
+    fig = go.Figure()
+    for k_key in ['k10', 'k100']:
+        for db in ['Milvus', 'Weaviate']:
+            for pct, dash in [('P50_mean', 'solid'), ('P95_mean', 'dash')]:
+                val = get_agg(data, k_key, db, pct)
+                label = f"{db} {pct.replace('_mean','')} ({k_key})"
+                fig.add_trace(go.Bar(name=label, x=[f"{k_key.upper()} {pct.replace('_mean','')}"],
+                                     y=[val], marker_color=COLORS[db],
+                                     opacity=1.0 if 'P50' in pct else 0.6,
+                                     text=[f"{val:.2f}"], textposition='outside'))
+    fig.update_layout(title='Query Latency Breakdown', yaxis_title='Latency (ms)',
+                      barmode='group', height=400, **PLOTLY_LAYOUT)
+    fig.update_yaxes(rangemode='tozero')
+    return fig
+
+
+def single_filter_chart(data):
+    fig = go.Figure()
+    for k_key_base in ['k10', 'k100']:
+        for db in ['Milvus', 'Weaviate']:
+            no_filt = get_agg(data, k_key_base, db, 'P50_mean')
+            filt = get_agg(data, f'{k_key_base}_filter', db, 'P50_mean')
+            fig.add_trace(go.Bar(
+                name=f'{db} {k_key_base.upper()}',
+                x=['No Filter', 'With Filter'],
+                y=[no_filt, filt],
+                marker_color=COLORS[db],
+                text=[f"{no_filt:.2f}", f"{filt:.2f}"],
+                textposition='outside',
+            ))
+    fig.update_layout(title='Filter Impact', yaxis_title='P50 Latency (ms)',
+                      barmode='group', height=380, **PLOTLY_LAYOUT)
+    fig.update_yaxes(rangemode='tozero')
+    return fig
+
+
+def single_concurrent_chart(data, ds_name):
+    conc = data.get('concurrent')
+    if not conc:
         return None
-    
-    try:
-        client = OpenAI(api_key=api_key)
-        
-        summary = f"""
-## Benchmark Results Summary
+    fig = go.Figure()
+    for db_key, db_name in [('milvus', 'Milvus'), ('weaviate', 'Weaviate')]:
+        entries = conc.get(db_key, [])
+        if not entries:
+            continue
+        clients = [e['n_clients'] for e in entries]
+        qps = [e['qps'] for e in entries]
+        p50 = [e['p50_ms'] for e in entries]
+        fig.add_trace(go.Scatter(
+            x=clients, y=qps, mode='lines+markers', name=f'{db_name} QPS',
+            line=dict(color=COLORS[db_name], width=2), marker=dict(size=8),
+            text=[f"P50={p:.1f}ms" for p in p50], hoverinfo='text+x+y',
+        ))
+    fig.update_layout(title=f'Concurrent Scaling: {DATASET_META[ds_name]["label"]}',
+                      xaxis_title='Concurrent Clients', yaxis_title='QPS',
+                      height=400, **PLOTLY_LAYOUT)
+    fig.update_xaxes(tickvals=[1, 2, 4, 8, 16])
+    return fig
 
-**Dataset:** {benchmark['dataset']} ({benchmark['vectors']:,} vectors, {benchmark['dimensions']}D)
-**Raw Data Size:** {benchmark['raw_data_size']:.2f} MB
+def build_summary_table(results, datasets):
+    rows = []
+    for d in datasets:
+        r = results[d]
+        meta = DATASET_META[d]
+        m_load = r['loading']['Milvus']['load_time_seconds']
+        w_load = r['loading']['Weaviate']['load_time_seconds']
+        m_p50 = get_agg(r, 'k10', 'Milvus', 'P50_mean')
+        w_p50 = get_agg(r, 'k10', 'Weaviate', 'P50_mean')
+        m_qps = get_agg(r, 'k10', 'Milvus', 'QPS_mean')
+        w_qps = get_agg(r, 'k10', 'Weaviate', 'QPS_mean')
+        m_recall = r.get('recall', {}).get('k10', {}).get('Milvus', 0)
+        w_recall = r.get('recall', {}).get('k10', {}).get('Weaviate', 0)
 
-### Data Loading Performance:
-- Milvus: {benchmark['loading']['Milvus']['load_time']:.1f}s, {benchmark['loading']['Milvus']['peak_memory']:.1f} MB peak memory
-- Weaviate: {benchmark['loading']['Weaviate']['load_time']:.1f}s, {benchmark['loading']['Weaviate']['peak_memory']:.1f} MB peak memory
-
-### Query Performance:
-"""
-        if benchmark['query_performance'] is not None:
-            summary += benchmark['query_performance'].to_string(index=False)
-        
-        if benchmark['recall'] is not None:
-            summary += "\n\n### Recall@K Accuracy:\n"
-            summary += benchmark['recall'].to_string(index=False)
-        
-        prompt = f"""
-You are an expert in vector databases. Analyze these benchmark results comparing Milvus and Weaviate:
-
-{summary}
-
-Provide:
-1. **Key Findings** (3-4 bullet points summarizing the most important results with specific numbers)
-2. **Choose Milvus if:** (4-5 specific recommendations based on this data)
-3. **Choose Weaviate if:** (4-5 specific recommendations based on this data)
-
-Be specific, reference actual numbers, and format in clean Markdown.
-"""
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a technical expert providing data-driven database recommendations. Be concise and specific."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=800,
-            temperature=0.7
-        )
-        
-        return response.choices[0].message.content
-    
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-
-# =============================================================================
-# MAIN APP
-# =============================================================================
+        rows.append({
+            'Dataset': meta['label'],
+            'Vectors': f"{meta['vectors']:,}",
+            'Dim': meta['dim'],
+            'Metric': meta['metric'],
+            'M Load (s)': f"{m_load:.1f}",
+            'W Load (s)': f"{w_load:.1f}",
+            'M P50 (ms)': f"{m_p50:.2f}",
+            'W P50 (ms)': f"{w_p50:.2f}",
+            'M QPS': f"{m_qps:.0f}",
+            'W QPS': f"{w_qps:.0f}",
+            'M Recall@10': f"{m_recall:.2%}",
+            'W Recall@10': f"{w_recall:.2%}",
+        })
+    return pd.DataFrame(rows)
 
 def main():
-    # Header
-    st.markdown('<h1 class="main-header">🔍 Vector Database Benchmark</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Milvus vs Weaviate Performance Comparison</p>', unsafe_allow_html=True)
-    
-    # Load benchmark files
-    benchmark_files = get_benchmark_files()
-    
-    if not benchmark_files:
-        st.warning("⚠️ No benchmark files found in `results/` directory.")
-        st.info("Run `python run_benchmark.py` to generate benchmark results.")
+    st.markdown('<h1 class="main-header">Vector Database Benchmark</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Milvus vs Weaviate &mdash; Paper Results Dashboard</p>',
+                unsafe_allow_html=True)
+
+    results = load_all_results()
+    if not results:
+        st.error("No results found in `results/paper/`. Run benchmarks first.")
         return
-    
-    # Parse ALL benchmarks for total analysis
-    all_benchmarks = [parse_benchmark_file(f) for f in benchmark_files]
-    
-    # Sidebar - File selection
-    st.sidebar.header("📁 Benchmark Selection")
-    
-    # Add "Total Analysis" option
-    view_options = ["📊 Total Analysis (All Benchmarks)"] + [f.name for f in benchmark_files]
-    selected_view = st.sidebar.selectbox(
-        "Select View",
-        options=view_options,
-        format_func=lambda x: x if x.startswith("📊") else x.replace('complete_benchmark_', '').replace('.txt', '')
-    )
-    
-    # AI Analysis section in sidebar
-    st.sidebar.divider()
-    st.sidebar.subheader("🤖 AI Analysis")
-    env_api_key = os.getenv("OPENAI_API_KEY", "")
-    api_key = st.sidebar.text_input(
-        "OpenAI API Key",
-        value=env_api_key,
-        type="password",
-        help="Auto-loaded from .env file"
-    )
-    analyze_btn = st.sidebar.button("🔍 Analyze with AI", use_container_width=True)
-    
-    # Check if Total Analysis view
-    if selected_view.startswith("📊"):
-        # =====================================================================
-        # TOTAL ANALYSIS VIEW
-        # =====================================================================
-        
-        st.sidebar.divider()
-        st.sidebar.subheader("📊 Total Analysis")
-        st.sidebar.markdown(f"**Benchmarks loaded:** {len(all_benchmarks)}")
-        datasets = [b['dataset'] for b in all_benchmarks if b['dataset']]
-        st.sidebar.markdown(f"**Datasets:** {', '.join(datasets)}")
-        
-        # Main content - Total Analysis
-        st.header("📊 Total Analysis - All Benchmarks")
-        st.info(f"Analyzing {len(all_benchmarks)} benchmark runs across {len(datasets)} datasets")
-        
-        # Summary Table
-        st.subheader("📋 Summary Table")
-        summary_df = create_summary_table(all_benchmarks)
-        if not summary_df.empty:
-            st.dataframe(summary_df, use_container_width=True, hide_index=True)
-        
+
+    available = [d for d in DISPLAY_ORDER if d in results]
+
+    st.sidebar.header("Navigation")
+    view = st.sidebar.radio("View", ["Cross-Dataset Analysis", "Single Dataset Deep Dive"])
+
+    if view == "Cross-Dataset Analysis":
+        st.sidebar.subheader("Datasets")
+        selected = st.sidebar.multiselect(
+            "Include datasets:", available, default=available,
+            format_func=lambda d: DATASET_META[d]['label'],
+        )
+        if not selected:
+            st.warning("Select at least one dataset.")
+            return
+
+        datasets = [d for d in DISPLAY_ORDER if d in selected]
+
+        st.header("Summary")
+        st.dataframe(build_summary_table(results, datasets), use_container_width=True, hide_index=True)
         st.divider()
-        
-        # Win Rate Charts
-        st.subheader("🏆 Win Rate Analysis")
-        fig, wins = create_win_rate_chart(all_benchmarks)
-        if fig:
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Summary metrics
-            total_milvus = sum(wins['Milvus'].values())
-            total_weaviate = sum(wins['Weaviate'].values())
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Milvus Total Wins", total_milvus)
-            with col2:
-                st.metric("Weaviate Total Wins", total_weaviate)
-            with col3:
-                winner = "Milvus" if total_milvus > total_weaviate else "Weaviate" if total_weaviate > total_milvus else "Tie"
-                st.metric("Overall Leader", f"{winner} 🏆")
-        
+
+        st.header("Loading Performance")
+        fig1, fig2 = chart_loading(results, datasets)
+        c1, c2 = st.columns(2)
+        c1.plotly_chart(fig1, use_container_width=True)
+        c2.plotly_chart(fig2, use_container_width=True)
         st.divider()
-        
-        # Load Time & Memory Comparison
-        st.subheader("⏱️ Loading Performance Comparison")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fig = create_load_time_comparison_all(all_benchmarks)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            fig = create_memory_comparison_all(all_benchmarks)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-        
+
+        st.header("Query Latency")
+        figs = chart_query_latency(results, datasets)
+        c1, c2 = st.columns(2)
+        c1.plotly_chart(figs[0], use_container_width=True)
+        c2.plotly_chart(figs[1], use_container_width=True)
         st.divider()
-        
-        # Scalability Analysis
-        st.subheader("📈 Scalability Analysis")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fig = create_scalability_chart(all_benchmarks)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            fig = create_qps_scalability_chart(all_benchmarks)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-        
+
+        st.header("Filter Impact")
+        fig = chart_filter_impact(results, datasets)
+        st.plotly_chart(fig, use_container_width=True)
         st.divider()
-        
-        # Recall Comparison
-        recall_benchmarks = [b for b in all_benchmarks if b['recall'] is not None]
-        if recall_benchmarks:
-            st.subheader("🎯 Accuracy Comparison")
-            fig = create_recall_comparison_all(all_benchmarks)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-            
-            st.divider()
-        
-        # Overall Radar Chart
-        st.subheader("🎯 Average Performance Radar")
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            fig = create_overall_radar_all(all_benchmarks)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            st.markdown("""
-            **How to read this chart:**
-            
-            Each axis represents average performance across all benchmarks:
-            - **Load Speed**: Faster loading = higher score
-            - **Memory Efficiency**: Lower memory = higher score
-            - **Query Speed**: Lower latency = higher score
-            - **Throughput**: Higher QPS = higher score
-            - **Accuracy**: Higher recall = higher score
-            
-            Larger area = better overall performance.
-            """)
-        
+
+        st.header("Recall@K Accuracy")
+        recall_figs = chart_recall(results, datasets)
+        if recall_figs:
+            c1, c2 = st.columns(2)
+            c1.plotly_chart(recall_figs[0], use_container_width=True)
+            c2.plotly_chart(recall_figs[1], use_container_width=True)
         st.divider()
-        
-        # AI Recommendations for Total Analysis
-        st.header("💡 AI Recommendations (All Benchmarks)")
-        
-        if analyze_btn and api_key:
-            with st.spinner("🤖 AI is analyzing all benchmark data..."):
-                ai_result = get_ai_recommendations_total(all_benchmarks, api_key)
-                if ai_result:
-                    st.session_state['ai_recommendations_total'] = ai_result
-        
-        if 'ai_recommendations_total' in st.session_state:
-            st.markdown(st.session_state['ai_recommendations_total'])
+
+        st.header("Concurrent Scaling")
+        conc_fig = chart_concurrent(results, datasets)
+        if conc_fig:
+            st.plotly_chart(conc_fig, use_container_width=True)
         else:
-            st.info("👆 Click 'Analyze with AI' in the sidebar to get comprehensive recommendations based on all benchmark data.")
-        
+            st.info("No concurrent data available for the selected datasets.")
+        st.divider()
+
+        st.header("Dimensionality Impact")
+        dim_fig = chart_dimensionality(results, datasets)
+        st.plotly_chart(dim_fig, use_container_width=True)
+        st.caption("Using datasets of ~1M vectors (GloVe-25/100/200, SIFT, GIST) to isolate dimensionality effect.")
+        st.divider()
+
+        st.header("Scale Impact")
+        scale_fig = chart_scale(results, datasets)
+        st.plotly_chart(scale_fig, use_container_width=True)
+        st.caption("Using F-MNIST (60K), SIFT (1M), Deep-96 (2M, 5M) to show scale effect.")
+        st.divider()
+
+        st.header("Resource Usage During Loading")
+        rfig1, rfig2 = chart_resources(results, datasets)
+        c1, c2 = st.columns(2)
+        c1.plotly_chart(rfig1, use_container_width=True)
+        c2.plotly_chart(rfig2, use_container_width=True)
+
     else:
-        # =====================================================================
-        # SINGLE BENCHMARK VIEW
-        # =====================================================================
-        
-        # Find the selected benchmark file
-        file_options = {f.name: f for f in benchmark_files}
-        benchmark = parse_benchmark_file(file_options[selected_view])
-        
-        # Display dataset info in sidebar
-        st.sidebar.divider()
-        st.sidebar.subheader("📊 Dataset Info")
-        st.sidebar.markdown(f"""
-        - **Dataset:** {benchmark['dataset']}
-        - **Vectors:** {benchmark['vectors']:,}
-        - **Dimensions:** {benchmark['dimensions']}D
-        - **Raw Size:** {benchmark['raw_data_size']:.2f} MB
-        - **Date:** {benchmark['date']}
-        """)
-        
-        # Row 1: Key Metrics
-        st.header("📈 Key Metrics")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        m_load = benchmark['loading']['Milvus']['load_time']
-        w_load = benchmark['loading']['Weaviate']['load_time']
-        load_winner = "Milvus" if m_load < w_load else "Weaviate"
-        
-        m_mem = benchmark['loading']['Milvus']['peak_memory']
-        w_mem = benchmark['loading']['Weaviate']['peak_memory']
-        mem_winner = "Milvus" if m_mem < w_mem else "Weaviate"
-        
-        with col1:
-            st.metric("Milvus Load Time", f"{m_load:.1f}s", 
-                      f"{'🏆 Faster' if load_winner == 'Milvus' else ''}")
-        
-        with col2:
-            st.metric("Weaviate Load Time", f"{w_load:.1f}s",
-                      f"{'🏆 Faster' if load_winner == 'Weaviate' else ''}")
-        
-        with col3:
-            st.metric("Milvus Peak Memory", f"{m_mem:.0f} MB",
-                      f"{'🏆 Lower' if mem_winner == 'Milvus' else ''}")
-        
-        with col4:
-            st.metric("Weaviate Peak Memory", f"{w_mem:.0f} MB",
-                      f"{'🏆 Lower' if mem_winner == 'Weaviate' else ''}")
-        
+        ds_name = st.sidebar.selectbox(
+            "Select dataset:", available,
+            format_func=lambda d: DATASET_META[d]['label'],
+        )
+        data = results[ds_name]
+        meta = DATASET_META[ds_name]
+
+        st.header(meta['label'])
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Vectors", f"{meta['vectors']:,}")
+        c2.metric("Dimensions", meta['dim'])
+        c3.metric("Distance Metric", meta['metric'])
+        c4.metric("Index", data.get('config', {}).get('index_config', {}).get('M', '16'))
         st.divider()
-        
-        # Row 2: Loading & Memory Charts
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fig = create_loading_time_chart(benchmark)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            fig = create_memory_chart(benchmark)
-            st.plotly_chart(fig, use_container_width=True)
-        
+
+        st.subheader("Loading Performance")
+        m = data['loading']['Milvus']
+        w = data['loading']['Weaviate']
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Milvus Load Time", f"{m['load_time_seconds']:.1f}s")
+            st.metric("Milvus Peak Memory", f"{m.get('peak_memory_mb', 0):.0f} MB")
+            st.metric("Milvus Avg CPU", f"{m.get('avg_cpu_percent', 0):.1f}%")
+        with c2:
+            st.metric("Weaviate Load Time", f"{w['load_time_seconds']:.1f}s")
+            st.metric("Weaviate Peak Memory", f"{w.get('peak_memory_mb', 0):.0f} MB")
+            st.metric("Weaviate Avg CPU", f"{w.get('avg_cpu_percent', 0):.1f}%")
+
+        fig = single_loading_chart(data, ds_name)
+        st.plotly_chart(fig, use_container_width=True)
         st.divider()
-        
-        # Row 3: Query Performance
-        st.header("⚡ Query Performance")
-        
-        if benchmark['query_performance'] is not None:
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                fig = create_latency_comparison_chart(benchmark['query_performance'])
-                if fig:
-                    st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                fig = create_qps_chart(benchmark['query_performance'])
-                if fig:
-                    st.plotly_chart(fig, use_container_width=True)
-            
-            # Heatmap
-            fig = create_latency_heatmap(benchmark['query_performance'])
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-            
-            # Filter impact
-            fig = create_filter_impact_chart(benchmark['query_performance'])
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("No query performance data available.")
-        
+
+        st.subheader("Query Latency")
+        perf_rows = []
+        for entry in data.get('aggregated', []):
+            perf_rows.append({
+                'Database': entry['Database'],
+                'K': entry['K'],
+                'P50 (ms)': entry.get('P50 (ms)', ''),
+                'P95 (ms)': entry.get('P95 (ms)', ''),
+                'QPS': entry.get('QPS', ''),
+            })
+        if perf_rows:
+            st.dataframe(pd.DataFrame(perf_rows), use_container_width=True, hide_index=True)
+
+        fig = single_latency_chart(data)
+        st.plotly_chart(fig, use_container_width=True)
         st.divider()
-        
-        # Row 4: Recall (if available)
-        if benchmark['recall'] is not None:
-            st.header("🎯 Search Accuracy (Recall@K)")
-            
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                fig = create_recall_chart(benchmark['recall'])
-                if fig:
+
+        st.subheader("Filter Impact")
+        fig = single_filter_chart(data)
+        st.plotly_chart(fig, use_container_width=True)
+        st.divider()
+
+        if data.get('recall'):
+            st.subheader("Recall@K")
+            recall = data['recall']
+            rc1, rc2 = st.columns(2)
+            for col, k_str in [(rc1, 'k10'), (rc2, 'k100')]:
+                vals = recall.get(k_str, {})
+                with col:
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(x=['Milvus', 'Weaviate'],
+                                        y=[vals.get('Milvus', 0), vals.get('Weaviate', 0)],
+                                        marker_color=[MILVUS_COLOR, WEAVIATE_COLOR],
+                                        text=[f"{vals.get('Milvus',0):.4f}", f"{vals.get('Weaviate',0):.4f}"],
+                                        textposition='outside'))
+                    fig.update_layout(title=f'Recall@{k_str.replace("k","")}', yaxis_title='Recall',
+                                      height=350, **PLOTLY_LAYOUT)
+                    fig.update_yaxes(range=[0, 1.08])
                     st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                st.subheader("Recall Values")
-                styled_df = benchmark['recall'].style.format({
-                    'Milvus': '{:.2%}',
-                    'Weaviate': '{:.2%}'
-                }).background_gradient(
-                    subset=['Milvus', 'Weaviate'],
-                    cmap='RdYlGn',
-                    vmin=0.8,
-                    vmax=1.0
-                )
-                st.dataframe(styled_df, use_container_width=True)
-            
             st.divider()
-        
-        # Row 5: Overall Comparison Radar
-        st.header("🏆 Overall Comparison")
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            fig = create_radar_chart(benchmark)
+
+        if data.get('concurrent'):
+            st.subheader("Concurrent Scaling")
+            fig = single_concurrent_chart(data, ds_name)
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            st.subheader("Summary")
-            
-            wins = {'Milvus': 0, 'Weaviate': 0}
-            
-            if m_load < w_load:
-                wins['Milvus'] += 1
-            else:
-                wins['Weaviate'] += 1
-            
-            if m_mem < w_mem:
-                wins['Milvus'] += 1
-            else:
-                wins['Weaviate'] += 1
-            
-            if benchmark['query_performance'] is not None:
-                m_p50 = benchmark['query_performance'][(benchmark['query_performance']['Database'] == 'Milvus') & 
-                                                         (benchmark['query_performance']['Test'] == 'k10_nofilter')]['P50 (ms)']
-                w_p50 = benchmark['query_performance'][(benchmark['query_performance']['Database'] == 'Weaviate') & 
-                                                         (benchmark['query_performance']['Test'] == 'k10_nofilter')]['P50 (ms)']
-                if len(m_p50) > 0 and len(w_p50) > 0:
-                    if m_p50.values[0] < w_p50.values[0]:
-                        wins['Milvus'] += 1
-                    else:
-                        wins['Weaviate'] += 1
-            
-            if benchmark['recall'] is not None:
-                r10 = benchmark['recall'][benchmark['recall']['K'] == 10]
-                if not r10.empty:
-                    if r10['Milvus'].values[0] > r10['Weaviate'].values[0]:
-                        wins['Milvus'] += 1
-                    else:
-                        wins['Weaviate'] += 1
-            
-            st.metric("Milvus Wins", f"{wins['Milvus']} categories")
-            st.metric("Weaviate Wins", f"{wins['Weaviate']} categories")
-            
-            overall_winner = "Milvus" if wins['Milvus'] > wins['Weaviate'] else "Weaviate" if wins['Weaviate'] > wins['Milvus'] else "Tie"
-            st.success(f"**Overall Winner:** {overall_winner} 🏆")
-        
-        st.divider()
-        
-        # Row 6: AI Recommendations
-        st.header("💡 Recommendations")
-        
-        if analyze_btn and api_key:
-            with st.spinner("🤖 AI is analyzing your benchmark data..."):
-                ai_result = get_ai_recommendations(benchmark, api_key)
-                if ai_result:
-                    st.session_state['ai_recommendations'] = ai_result
-        
-        if 'ai_recommendations' in st.session_state:
-            st.markdown(st.session_state['ai_recommendations'])
-        else:
-            st.info("👆 Click 'Analyze with AI' in the sidebar to get personalized recommendations based on your benchmark data.")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("""
-                ### Choose **Milvus** if:
-                - Maximum query performance is critical
-                - You need fine-grained index control
-                - GPU acceleration is needed
-                - High throughput is a priority
-                """)
-            
-            with col2:
-                st.markdown("""
-                ### Choose **Weaviate** if:
-                - Search accuracy is paramount
-                - You need GraphQL API support
-                - Hybrid search (vector + keyword) is important
-                - Easier setup and management is preferred
-                """)
-    
-    # Footer
+
+                conc_rows = []
+                for db_key in ['milvus', 'weaviate']:
+                    for e in data['concurrent'].get(db_key, []):
+                        conc_rows.append({
+                            'Database': db_key.capitalize(),
+                            'Clients': e['n_clients'],
+                            'QPS': f"{e['qps']:.1f}",
+                            'P50 (ms)': f"{e['p50_ms']:.2f}",
+                            'P95 (ms)': f"{e['p95_ms']:.2f}",
+                            'P99 (ms)': f"{e['p99_ms']:.2f}",
+                            'Failed': e.get('failed', 0),
+                        })
+                st.dataframe(pd.DataFrame(conc_rows), use_container_width=True, hide_index=True)
+            st.divider()
+
+        if data.get('query_resources'):
+            st.subheader("Resource Usage During Queries")
+            qr = data['query_resources']
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Avg CPU", f"{qr.get('avg_cpu_percent', 0):.1f}%")
+            c2.metric("Peak Memory", f"{qr.get('peak_memory_mb', 0):.0f} MB")
+            c3.metric("Disk Write", f"{qr.get('disk_write_mb', 0):.0f} MB")
+            st.divider()
+
+        with st.expander("Raw JSON Data"):
+            st.json(data)
+
     st.divider()
-    st.markdown("""
-    <div style='text-align: center; color: #666;'>
-        <p>Built by minageus, cobra, mountzouris</p>
-        <p>Run <code>python run_benchmark.py</code> to generate new benchmarks</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        "<div style='text-align:center;color:#888;'>"
+        "Built by minageus, cobra, mountzouris "
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":
