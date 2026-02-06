@@ -2,7 +2,7 @@
 Streamlit frontend for visualizing and comparing Milvus vs Weaviate benchmark results from the paper.
 ============================================================
 
-Author: minageus, lolis, mountzouris
+Author: minageus, LOLIS, MOUNTZOURIS
 """
 
 import streamlit as st
