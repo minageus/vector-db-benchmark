@@ -4,21 +4,17 @@ import numpy as np
 from typing import List, Dict
 
 class MilvusQueryExecutor:
-    """Execute queries on Milvus and measure performance"""
-    
     def __init__(self, collection: Collection):
         self.collection = collection
         self._ensure_loaded()
     
     def _ensure_loaded(self):
-        """Ensure the collection is loaded into memory before querying"""
         try:
             state = utility.load_state(self.collection.name)
             if state.name != 'Loaded':
                 print(f"  Collection not loaded (state={state.name}), loading now...")
                 self.collection.load()
-                # Wait for it to load
-                for _ in range(60):  # Wait up to 60 seconds
+                for _ in range(60):
                     state = utility.load_state(self.collection.name)
                     if state.name == 'Loaded':
                         print("  Collection loaded successfully")
@@ -27,7 +23,6 @@ class MilvusQueryExecutor:
                 raise RuntimeError(f"Collection failed to load, state: {state.name}")
         except Exception as e:
             print(f"  Warning: Could not check load state: {e}")
-            # Try loading anyway
             try:
                 self.collection.load()
                 time.sleep(2)
@@ -42,7 +37,6 @@ class MilvusQueryExecutor:
         search_params: Dict = None,
         filters: List[Dict] = None
     ) -> Dict:
-        """Execute search queries and return metrics"""
         if search_params is None:
             search_params = {"metric_type": metric_type, "params": {"nprobe": 10}}
         
@@ -52,7 +46,6 @@ class MilvusQueryExecutor:
         for i, query_vec in enumerate(query_vectors):
             expr = None
             if filters and i < len(filters):
-                # Build filter expression
                 filter_dict = filters[i]
                 if 'category' in filter_dict:
                     cats = filter_dict['category']['$in']
@@ -69,7 +62,7 @@ class MilvusQueryExecutor:
             )
             
             latency = time.time() - start_time
-            latencies.append(latency * 1000)  # Convert to ms
+            latencies.append(latency * 1000)
             results_list.append(results)
         
         latencies = np.array(latencies)

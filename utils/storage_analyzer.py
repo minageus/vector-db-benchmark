@@ -16,10 +16,8 @@ import json
 
 
 class StorageAnalyzer:
-    """Analyze storage efficiency of vector databases"""
     
     def __init__(self):
-        """Initialize storage analyzer"""
         self.results = {}
     
     def analyze_milvus_storage(self, 
@@ -42,23 +40,18 @@ class StorageAnalyzer:
         if not data_path.exists():
             return {'error': f'Milvus data directory not found: {data_dir}'}
         
-        # Get total size
         total_size = self._get_directory_size(data_path)
         
-        # Try to break down by component
         breakdown = {}
         
-        # MinIO storage (vector data)
         minio_path = data_path / 'rdb_data'
         if minio_path.exists():
             breakdown['vector_data'] = self._get_directory_size(minio_path)
         
-        # etcd storage (metadata)
         etcd_path = Path('docker/volumes/etcd')
         if etcd_path.exists():
             breakdown['metadata'] = self._get_directory_size(etcd_path)
         
-        # Calculate compression ratio
         compression_ratio = None
         if raw_data_size_mb and breakdown.get('vector_data', 0) > 0:
             stored_size_mb = breakdown['vector_data']
@@ -183,7 +176,6 @@ class StorageAnalyzer:
         return comparison
     
     def print_analysis(self, db_name: str):
-        """Print storage analysis for a database"""
         if db_name not in self.results:
             print(f"No analysis results for {db_name}")
             return
@@ -214,7 +206,6 @@ class StorageAnalyzer:
         print(f"{'='*60}")
     
     def print_comparison(self):
-        """Print storage comparison"""
         comparison = self.compare_storage()
         
         if 'error' in comparison:
@@ -261,8 +252,6 @@ def calculate_raw_data_size(n_vectors: int, dimension: int, dtype_bytes: int = 4
     total_bytes = n_vectors * dimension * dtype_bytes
     return total_bytes / (1024 * 1024)
 
-
-# Example usage
 if __name__ == "__main__":
     import argparse
     
@@ -279,22 +268,18 @@ if __name__ == "__main__":
     
     analyzer = StorageAnalyzer()
     
-    # Calculate raw data size if provided
     raw_size = None
     if args.n_vectors and args.dimension:
         raw_size = calculate_raw_data_size(args.n_vectors, args.dimension)
         print(f"Raw data size: {raw_size:.2f} MB")
     
-    # Analyze both databases
     analyzer.analyze_milvus_storage(args.milvus_dir, raw_data_size_mb=raw_size)
     analyzer.print_analysis('milvus')
     
     analyzer.analyze_weaviate_storage(args.weaviate_dir, raw_data_size_mb=raw_size)
     analyzer.print_analysis('weaviate')
     
-    # Compare
     analyzer.print_comparison()
     
-    # Save results
     if args.output:
         analyzer.save_results(args.output)

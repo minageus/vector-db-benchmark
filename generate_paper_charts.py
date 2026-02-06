@@ -1,3 +1,10 @@
+"""
+Charts for paper - curated from full benchmark results
+============================================================
+
+Author: minageus, lolis, mountzouris
+"""
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt

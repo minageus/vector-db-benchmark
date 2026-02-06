@@ -1,3 +1,10 @@
+"""
+Streamlit frontend for visualizing and comparing Milvus vs Weaviate benchmark results from the paper.
+============================================================
+
+Author: minageus, lolis, mountzouris
+"""
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -585,7 +592,7 @@ def main():
     st.divider()
     st.markdown(
         "<div style='text-align:center;color:#888;'>"
-        "Built by minageus, cobra, mountzouris "
+        "Built by minageus, lolis, mountzouris "
         "</div>",
         unsafe_allow_html=True,
     )

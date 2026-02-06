@@ -52,10 +52,8 @@ class ResourceMonitor:
         self._thread: Optional[threading.Thread] = None
         self._process = psutil.Process()
         
-        # Initialize disk I/O counters
         self._initial_disk_io = psutil.disk_io_counters()
         
-        # Try to initialize GPU monitoring
         self.gpu_available = False
         if enable_gpu:
             try:
@@ -68,7 +66,6 @@ class ResourceMonitor:
                 self.gpu_available = False
     
     def start(self):
-        """Start monitoring in background thread"""
         if self._monitoring:
             return
         
@@ -79,25 +76,21 @@ class ResourceMonitor:
         self._thread.start()
     
     def stop(self):
-        """Stop monitoring"""
         self._monitoring = False
         if self._thread:
             self._thread.join(timeout=2.0)
     
     def _monitor_loop(self):
-        """Background monitoring loop"""
         while self._monitoring:
             snapshot = self._take_snapshot()
             self.snapshots.append(snapshot)
             time.sleep(self.interval)
     
     def _take_snapshot(self) -> ResourceSnapshot:
-        """Take a single resource snapshot"""
-        # CPU
+        
         cpu_percent = self._process.cpu_percent()
         cpu_per_core = psutil.cpu_percent(percpu=True)
         
-        # Memory
         mem_info = self._process.memory_info()
         mem_rss_mb = mem_info.rss / (1024 * 1024)
         mem_vms_mb = mem_info.vms / (1024 * 1024)
@@ -106,14 +99,12 @@ class ResourceMonitor:
         mem_percent = sys_mem.percent
         mem_available_mb = sys_mem.available / (1024 * 1024)
         
-        # Disk I/O
         disk_io = psutil.disk_io_counters()
         disk_read_mb = (disk_io.read_bytes - self._initial_disk_io.read_bytes) / (1024 * 1024)
         disk_write_mb = (disk_io.write_bytes - self._initial_disk_io.write_bytes) / (1024 * 1024)
         disk_read_count = disk_io.read_count - self._initial_disk_io.read_count
         disk_write_count = disk_io.write_count - self._initial_disk_io.write_count
         
-        # GPU (if available)
         gpu_util = None
         gpu_mem_mb = None
         if self.gpu_available:
@@ -150,7 +141,6 @@ class ResourceMonitor:
         if not self.snapshots:
             return {}
         
-        # Extract metrics
         cpu_percents = [s.cpu_percent for s in self.snapshots]
         mem_rss = [s.memory_rss_mb for s in self.snapshots]
         mem_percent = [s.memory_percent for s in self.snapshots]
@@ -172,7 +162,6 @@ class ResourceMonitor:
             'duration_seconds': len(self.snapshots) * self.interval
         }
         
-        # Add GPU stats if available
         if self.gpu_available and self.snapshots[0].gpu_utilization is not None:
             gpu_utils = [s.gpu_utilization for s in self.snapshots if s.gpu_utilization is not None]
             gpu_mems = [s.gpu_memory_used_mb for s in self.snapshots if s.gpu_memory_used_mb is not None]
@@ -253,25 +242,19 @@ class ResourceMonitor:
         """Context manager exit"""
         self.stop()
 
-
-# Example usage
 if __name__ == "__main__":
     import time
     
     print("Testing Resource Monitor...")
     
-    # Test with context manager
     with ResourceMonitor(interval=0.1) as monitor:
-        # Simulate some work
         print("Doing some CPU-intensive work...")
         for i in range(5):
             _ = sum(range(10000000))
             time.sleep(0.5)
     
-    # Print results
     monitor.print_summary()
     
-    # Get detailed stats
     stats = monitor.get_stats()
     print("\nDetailed Stats:")
     import json

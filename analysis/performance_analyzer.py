@@ -6,8 +6,7 @@ from typing import Dict, List
 import json
 
 class PerformanceAnalyzer:
-    """Analyze and visualize benchmark results"""
-    
+
     def __init__(self, results_dir='results'):
         self.results_dir = results_dir
         sns.set_style('whitegrid')
@@ -17,11 +16,9 @@ class PerformanceAnalyzer:
         latencies_dict: Dict[str, np.ndarray],
         output_path: str
     ):
-        """Create latency distribution plots"""
-        
+
         fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-        
-        # Histogram
+
         for db_name, latencies in latencies_dict.items():
             axes[0, 0].hist(latencies, bins=50, alpha=0.6, label=db_name)
         axes[0, 0].set_xlabel('Latency (ms)')

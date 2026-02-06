@@ -5,7 +5,6 @@ from typing import Dict, List
 import numpy as np
 
 class MilvusLoader:
-    """Load data into Milvus and track metrics"""
     
     def __init__(self, host='localhost', port=19530):
         self.host = host
@@ -20,12 +19,10 @@ class MilvusLoader:
         }
     
     def connect(self):
-        """Connect to Milvus server"""
         connections.connect(host=self.host, port=self.port)
         print(f"Connected to Milvus at {self.host}:{self.port}")
     
     def create_collection(self, collection_name: str, dimension: int, drop_existing=True):
-        """Create a collection with specified dimension"""
         if drop_existing and utility.has_collection(collection_name):
             utility.drop_collection(collection_name)
         
@@ -47,7 +44,6 @@ class MilvusLoader:
         metadata: Dict = None,
         batch_size: int = 10000
     ):
-        """Load vectors into Milvus in batches"""
         n_vectors = len(ids)
         n_batches = (n_vectors + batch_size - 1) // batch_size
         
@@ -87,14 +83,6 @@ class MilvusLoader:
         print(f"  Memory used: {self.metrics['memory_used_mb']:.2f} MB")
     
     def create_index(self, index_type='HNSW', metric_type='L2', index_params=None, wait_timeout=600):
-        """Create index on the collection and wait for it to complete
-        
-        Args:
-            index_type: Type of index (HNSW, IVF_FLAT, etc.)
-            metric_type: Distance metric (L2, IP)
-            index_params: Index parameters
-            wait_timeout: Max seconds to wait for index to build (default 10 minutes)
-        """
         if index_params is None:
             index_params = {
                 "M": 16,
@@ -113,17 +101,14 @@ class MilvusLoader:
         print(f"  Distance metric: {metric_type}")
         self.collection.create_index(field_name="embedding", index_params=index_config)
         
-        # Wait for index to be fully built
         print("Waiting for index to finish building...")
         wait_start = time.time()
         last_progress = -1
         
         while time.time() - wait_start < wait_timeout:
-            # Check index building progress
             index_info = self.collection.index()
             index_progress = utility.index_building_progress(self.collection.name)
             
-            # Progress is a dict with 'total_rows' and 'indexed_rows'
             total = index_progress.get('total_rows', 0)
             indexed = index_progress.get('indexed_rows', 0)
             
@@ -141,20 +126,17 @@ class MilvusLoader:
             
             time.sleep(2)
         
-        # If we reach here, timeout occurred
         index_time = time.time() - start_time
         self.metrics['index_build_time'] = index_time
         print(f"WARNING: Index build timed out after {wait_timeout}s, but will try to continue")
         print(f"  (Index may still be building in background)")
     
     def load_collection(self, timeout=300):
-        """Load collection into memory and wait for it to be ready"""
         from pymilvus import utility
         
         self.collection.load()
         print("Loading collection into memory...")
         
-        # Wait for collection to be loaded
         start_time = time.time()
         while time.time() - start_time < timeout:
             state = utility.load_state(self.collection.name)
@@ -166,7 +148,5 @@ class MilvusLoader:
         raise TimeoutError(f"Collection failed to load within {timeout} seconds")
     
     def get_storage_size(self) -> float:
-        """Get storage size in MB"""
         stats = self.collection.get_compaction_state()
-        # This is a simplified version; actual implementation may vary
-        return 0.0  # Placeholder
+        return 0.0

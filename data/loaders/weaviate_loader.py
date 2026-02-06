@@ -11,9 +11,7 @@ import numpy as np
 from tqdm import tqdm
 
 class WeaviateLoader:
-    """Load data into Weaviate and track metrics"""
-    
-    # Index configuration for transparency/reproducibility
+
     INDEX_CONFIG = {
         'type': 'HNSW',
         'ef': 200,
@@ -38,7 +36,7 @@ class WeaviateLoader:
         }
     
     def connect(self):
-        """Connect to Weaviate server with extended timeouts for large batches"""
+
         self.client = weaviate.connect_to_local(
             host=self.host,
             port=self.port,
@@ -47,31 +45,24 @@ class WeaviateLoader:
                 timeout=Timeout(
                     init=30,
                     query=60,
-                    insert=300  # 5 minutes for large batch inserts
+                    insert=300  
                 )
             )
         )
         print(f"Connected to Weaviate at {self.host}:{self.port} (gRPC: {self.grpc_port})")
     
     def create_schema(self, dimension: int, drop_existing=True, metric_type: str = 'L2'):
-        """Create schema for vectors with specified distance metric
-        
-        Args:
-            dimension: Vector dimension
-            drop_existing: Whether to drop existing collection
-            metric_type: Distance metric - 'L2' (euclidean), 'IP' (inner product/cosine), 'cosine'
-        """
+
         if drop_existing:
             try:
                 self.client.collections.delete(self.collection_name)
             except:
                 pass
         
-        # Map metric type to Weaviate distance
         metric_map = {
             'L2': VectorDistances.L2_SQUARED,
             'l2': VectorDistances.L2_SQUARED,
-            'IP': VectorDistances.COSINE,  # Inner product ~ cosine for normalized vectors
+            'IP': VectorDistances.COSINE,  
             'ip': VectorDistances.COSINE,
             'cosine': VectorDistances.COSINE,
             'angular': VectorDistances.COSINE,
@@ -105,13 +96,11 @@ class WeaviateLoader:
         metadata: Dict = None,
         batch_size: int = 100
     ):
-        """Load vectors into Weaviate in batches"""
+
         n_vectors = len(ids)
         dimension = vectors.shape[1] if len(vectors.shape) > 1 else 1
         failed = 0
         
-        # Adjust batch size based on vector dimension to avoid gRPC timeouts
-        # High-dimensional vectors need smaller batches
         if dimension > 500:
             batch_size = min(batch_size, 50)
         elif dimension > 200:
@@ -126,11 +115,9 @@ class WeaviateLoader:
         
         start_time = time.time()
         
-        # Get or create collection reference
         if self.collection is None:
             self.collection = self.client.collections.get(self.collection_name)
         
-        # Use fixed-size batching for better control over gRPC payload size
         with self.collection.batch.fixed_size(batch_size=batch_size, concurrent_requests=2) as batch:
             for i in tqdm(range(n_vectors), desc="Loading vectors"):
                 properties = {

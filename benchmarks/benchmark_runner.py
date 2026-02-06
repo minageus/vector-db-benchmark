@@ -5,14 +5,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 class BenchmarkRunner:
-    """Run complete benchmark suite and generate reports"""
-    
+
     def __init__(self, output_dir='results'):
         self.output_dir = output_dir
         self.results = {}
     
     def run_benchmark(self, db_name: str, executor, queries, test_configs, metric_type='L2'):
-        """Run benchmark for a specific database"""
+
         print(f"\n{'='*60}")
         print(f"Running {db_name} Benchmark")
         print(f"{'='*60}")
@@ -41,10 +40,8 @@ class BenchmarkRunner:
         return db_results
     
     def generate_comparison_report(self):
-        """Generate comparison charts and tables"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Convert results to DataFrame
         comparison_data = []
         for db_name, tests in self.results.items():
             for test_name, metrics in tests.items():
@@ -60,19 +57,17 @@ class BenchmarkRunner:
         
         df = pd.DataFrame(comparison_data)
         
-        # Save to CSV
         csv_path = f"{self.output_dir}/comparison_{timestamp}.csv"
         df.to_csv(csv_path, index=False)
         print(f"\nResults saved to {csv_path}")
         
-        # Generate plots
         self._plot_latency_comparison(df, timestamp)
         self._plot_qps_comparison(df, timestamp)
         
         return df
     
     def _plot_latency_comparison(self, df, timestamp):
-        """Plot latency comparison"""
+
         fig, axes = plt.subplots(1, 3, figsize=(15, 5))
         
         for idx, metric in enumerate(['P50 (ms)', 'P95 (ms)', 'P99 (ms)']):
@@ -86,7 +81,7 @@ class BenchmarkRunner:
         print(f"Latency plot saved")
     
     def _plot_qps_comparison(self, df, timestamp):
-        """Plot QPS comparison"""
+
         plt.figure(figsize=(10, 6))
         pivot = df.pivot(index='Test', columns='Database', values='QPS')
         pivot.plot(kind='bar')

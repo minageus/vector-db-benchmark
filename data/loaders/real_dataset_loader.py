@@ -15,25 +15,12 @@ from utils.dataset_downloader import DatasetDownloader, read_fvecs, read_ivecs, 
 
 
 class RealDatasetLoader:
-    """Load real-world ANN benchmark datasets"""
-    
+
     def __init__(self, cache_dir: str = 'data/datasets'):
-        """Initialize loader with cache directory"""
         self.cache_dir = Path(cache_dir)
         self.downloader = DatasetDownloader(cache_dir=str(cache_dir))
     
     def load_sift1m(self, download: bool = True) -> Dict[str, Any]:
-        """
-        Load SIFT1M dataset
-        
-        Returns:
-            dict with keys:
-                - base: (1M, 128) base vectors
-                - query: (10K, 128) query vectors
-                - groundtruth: (10K, 100) ground truth neighbors
-                - learn: (100K, 128) learning/training vectors
-                - metadata: dataset information
-        """
         dataset_name = 'sift1m'
         dataset_dir = self.downloader.get_dataset_path(dataset_name)
         
@@ -44,17 +31,14 @@ class RealDatasetLoader:
             else:
                 raise FileNotFoundError(f"Dataset {dataset_name} not found. Use download=True")
         
-        # Find the actual directory containing the files (may be nested)
         sift_dir = self._find_dataset_files(dataset_dir, 'sift_base.fvecs')
         
         print(f"\nLoading SIFT1M from {sift_dir}...")
         
-        # Load vectors
         base = read_fvecs(str(sift_dir / 'sift_base.fvecs'))
         query = read_fvecs(str(sift_dir / 'sift_query.fvecs'))
         groundtruth = read_ivecs(str(sift_dir / 'sift_groundtruth.ivecs'))
         
-        # Learn set (optional, for training)
         learn_file = sift_dir / 'sift_learn.fvecs'
         learn = read_fvecs(str(learn_file)) if learn_file.exists() else None
         
@@ -65,7 +49,6 @@ class RealDatasetLoader:
         if learn is not None:
             print(f"  Learn vectors: {learn.shape}")
         
-        # Generate metadata
         metadata = self._generate_metadata(base.shape[0])
         
         return {
@@ -85,12 +68,6 @@ class RealDatasetLoader:
         }
     
     def load_gist1m(self, download: bool = True) -> Dict[str, Any]:
-        """
-        Load GIST1M dataset
-        
-        Returns:
-            dict with keys similar to load_sift1m
-        """
         dataset_name = 'gist1m'
         dataset_dir = self.downloader.get_dataset_path(dataset_name)
         
@@ -138,34 +115,20 @@ class RealDatasetLoader:
         }
     
     def load_sift10m(self, download: bool = True) -> Dict[str, Any]:
-        """
-        Load SIFT10M dataset (BigANN 10M subset)
-        
-        Returns:
-            dict with keys:
-                - base: (10M, 128) base vectors
-                - query: (10K, 128) query vectors
-                - groundtruth: (10K, 100) ground truth neighbors
-                - metadata: dataset information
-        """
         dataset_name = 'sift10m'
         dataset_dir = self.downloader.get_dataset_path(dataset_name)
         
         if dataset_dir is None:
             if download:
                 print(f"Dataset not found. Downloading {dataset_name}...")
-                print("WARNING: This is a large dataset (~12GB download). This may take a while.")
                 dataset_dir = self.downloader.download_dataset(dataset_name)
             else:
                 raise FileNotFoundError(f"Dataset {dataset_name} not found. Use download=True")
         
-        # The processed files are in fvecs format
         sift_dir = dataset_dir
         
         print(f"\nLoading SIFT10M from {sift_dir}...")
-        print("This may take a few minutes due to dataset size...")
         
-        # Load vectors
         base = read_fvecs(str(sift_dir / 'sift10m_base.fvecs'))
         query = read_fvecs(str(sift_dir / 'sift10m_query.fvecs'))
         groundtruth = read_ivecs(str(sift_dir / 'idx_10M.ivecs'))
@@ -175,7 +138,6 @@ class RealDatasetLoader:
         print(f"  Query vectors: {query.shape}")
         print(f"  Ground truth: {groundtruth.shape}")
         
-        # Generate metadata
         metadata = self._generate_metadata(base.shape[0])
         
         return {
@@ -195,17 +157,6 @@ class RealDatasetLoader:
         }
     
     def load_glove(self, dimension: int = 100, download: bool = True, max_vectors: Optional[int] = None) -> Dict[str, Any]:
-        """
-        Load GloVe word embeddings
-        
-        Args:
-            dimension: Embedding dimension (25, 50, 100, 200, 300)
-            download: Download if not cached
-            max_vectors: Limit number of vectors (for testing)
-            
-        Returns:
-            dict with base vectors and metadata
-        """
         dataset_name = 'glove-100'
         dataset_dir = self.downloader.get_dataset_path(dataset_name)
         
@@ -218,7 +169,6 @@ class RealDatasetLoader:
         
         glove_file = dataset_dir / f'glove.6B.{dimension}d.txt'
         if not glove_file.exists():
-            # Try to find in subdirectory
             glove_file = self._find_dataset_files(dataset_dir, f'glove.6B.{dimension}d.txt') / f'glove.6B.{dimension}d.txt'
         
         print(f"\nLoading GloVe-{dimension}D from {glove_file}...")
@@ -244,17 +194,15 @@ class RealDatasetLoader:
         print(f"  Vectors: {base.shape}")
         print(f"  Vocabulary: {len(words)} words")
         
-        # Create metadata with words
         metadata = pd.DataFrame({
             'id': np.arange(len(words)),
             'word': words,
-            'category': np.random.randint(0, 10, len(words)),  # Dummy categories
+            'category': np.random.randint(0, 10, len(words)),
             'price': np.random.uniform(10, 1000, len(words)),
             'timestamp': pd.date_range('2024-01-01', periods=len(words), freq='s'),
             'rating': np.random.uniform(1, 5, len(words))
         })
         
-        # Generate query vectors (random subset)
         n_queries = min(1000, len(base) // 10)
         query_indices = np.random.choice(len(base), n_queries, replace=False)
         query = base[query_indices]
@@ -262,7 +210,7 @@ class RealDatasetLoader:
         return {
             'base': base,
             'query': query,
-            'groundtruth': None,  # No pre-computed ground truth
+            'groundtruth': None,  
             'metadata': metadata,
             'words': words,
             'info': {
@@ -293,7 +241,6 @@ class RealDatasetLoader:
             else:
                 raise FileNotFoundError(f"Dataset {dataset_name} not found. Use download=True")
         
-        # Find HDF5 file in directory
         hdf5_files = list(dataset_dir.glob('*.hdf5'))
         if not hdf5_files:
             raise FileNotFoundError(f"No HDF5 files found in {dataset_dir}")
@@ -302,18 +249,15 @@ class RealDatasetLoader:
         print(f"\nLoading {dataset_name} from {hdf5_file}...")
         
         with h5py.File(hdf5_file, 'r') as f:
-            # Standard ann-benchmarks HDF5 structure
             base = np.array(f['train']).astype(np.float32)
             query = np.array(f['test']).astype(np.float32)
             
-            # Ground truth neighbors (may have different keys)
             if 'neighbors' in f:
                 groundtruth = np.array(f['neighbors'])
             else:
                 groundtruth = None
             
-            # Get distance metric from filename or attributes
-            metric = 'L2'  # default
+            metric = 'L2' 
             filename_lower = str(hdf5_file).lower()
             if 'angular' in filename_lower or 'cosine' in filename_lower:
                 metric = 'cosine'
@@ -352,17 +296,6 @@ class RealDatasetLoader:
         }
     
     def load_dataset(self, name: str, **kwargs) -> Dict[str, Any]:
-        """
-        Load any dataset by name
-        
-        Args:
-            name: Dataset name (sift1m, sift10m, gist1m, glove-100, mnist-784, etc.)
-            **kwargs: Additional arguments for specific loaders
-            
-        Returns:
-            Dataset dictionary
-        """
-        # Datasets with specific loaders
         specific_loaders = {
             'sift1m': self.load_sift1m,
             'sift10m': self.load_sift10m,
@@ -371,7 +304,6 @@ class RealDatasetLoader:
             'glove-300': lambda **kw: self.load_glove(dimension=300, **kw),
         }
 
-        # HDF5 datasets from ann-benchmarks.com
         hdf5_datasets = [
             'mnist-784', 'fashion-mnist-784', 'nytimes-256',
             'lastfm-64', 'kosarak-27983', 'deep-image-96', 'random-xs-20',
@@ -387,12 +319,10 @@ class RealDatasetLoader:
             raise ValueError(f"Unknown dataset: {name}. Available: {available}")
     
     def _find_dataset_files(self, base_dir: Path, target_file: str) -> Path:
-        """Find directory containing target file (handles nested archives)"""
-        # Check base directory
+
         if (base_dir / target_file).exists():
             return base_dir
         
-        # Search subdirectories
         for subdir in base_dir.rglob('*'):
             if subdir.is_dir() and (subdir / target_file).exists():
                 return subdir
@@ -400,7 +330,7 @@ class RealDatasetLoader:
         raise FileNotFoundError(f"Could not find {target_file} in {base_dir}")
     
     def _generate_metadata(self, n_vectors: int) -> pd.DataFrame:
-        """Generate dummy metadata for datasets without metadata"""
+
         return pd.DataFrame({
             'id': np.arange(n_vectors),
             'category': np.random.randint(0, 10, n_vectors),
@@ -410,16 +340,7 @@ class RealDatasetLoader:
         })
     
     def get_subset(self, data: Dict[str, Any], n_vectors: int) -> Dict[str, Any]:
-        """
-        Get a subset of a dataset (for testing with smaller data)
-        
-        Args:
-            data: Dataset dictionary
-            n_vectors: Number of vectors to keep
-            
-        Returns:
-            Subset dataset dictionary
-        """
+
         n_vectors = min(n_vectors, len(data['base']))
         
         subset = {
@@ -435,8 +356,6 @@ class RealDatasetLoader:
         
         return subset
 
-
-# Example usage
 if __name__ == "__main__":
     import argparse
     
@@ -452,10 +371,8 @@ if __name__ == "__main__":
     
     loader = RealDatasetLoader()
     
-    # Load dataset
     data = loader.load_dataset(args.dataset, download=not args.no_download)
     
-    # Get subset if requested
     if args.subset:
         data = loader.get_subset(data, args.subset)
     

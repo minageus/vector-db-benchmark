@@ -14,7 +14,7 @@ Usage:
     python run_paper_benchmark.py --dataset sift1m --subset 500000
     python run_paper_benchmark.py --sweep-ef  # Run latency-recall tradeoff
 
-Author: minageus, cobra, mountzouris
+Author: minageus, lolis, mountzouris
 """
 
 import argparse

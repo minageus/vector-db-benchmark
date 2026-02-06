@@ -20,9 +20,6 @@ from typing import Optional, Tuple
 import numpy as np
 
 class DatasetDownloader:
-    """Download and cache ANN benchmark datasets"""
-    
-    # Dataset URLs and metadata
     DATASETS = {
         'sift1m': {
             'url': 'http://corpus-texmex.irisa.fr/sift.tar.gz',
@@ -131,32 +128,19 @@ class DatasetDownloader:
     }
     
     def __init__(self, cache_dir: str = 'data/datasets'):
-        """Initialize downloader with cache directory"""
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
     
     def download_dataset(self, name: str, force: bool = False) -> Path:
-        """
-        Download dataset if not cached
-        
-        Args:
-            name: Dataset name (sift1m, gist1m, glove-100, sift10m)
-            force: Force re-download even if cached
-            
-        Returns:
-            Path to dataset directory
-        """
         if name not in self.DATASETS:
             raise ValueError(f"Unknown dataset: {name}. Available: {list(self.DATASETS.keys())}")
         
-        # Handle special case for sift10m (BigANN subset)
         if name == 'sift10m':
             return self.download_sift10m(force=force)
         
         dataset_info = self.DATASETS[name]
         dataset_dir = self.cache_dir / name
         
-        # Check if already downloaded
         if dataset_dir.exists() and not force:
             print(f"OK Dataset '{name}' already cached at {dataset_dir}")
             return dataset_dir
@@ -168,7 +152,6 @@ class DatasetDownloader:
         print(f"Size: ~{dataset_info['size_mb']} MB")
         print(f"{'='*60}\n")
         
-        # Try primary URL first, then mirrors
         urls_to_try = [dataset_info['url']]
         if 'mirror_urls' in dataset_info:
             urls_to_try.extend(dataset_info['mirror_urls'])
@@ -176,21 +159,19 @@ class DatasetDownloader:
         filename = urls_to_try[0].split('/')[-1]
         filepath = dataset_dir / filename
         
-        # Try each URL until one works
         last_error = None
         for i, url in enumerate(urls_to_try):
             try:
                 if i > 0:
                     print(f"\nTrying mirror {i}: {url}")
                 self._download_file(url, filepath)
-                break  # Success!
+                break 
             except Exception as e:
                 last_error = e
                 print(f"Failed: {e}")
                 if i < len(urls_to_try) - 1:
                     continue
                 else:
-                    # All URLs failed
                     print(f"\n{'='*60}")
                     print("ERROR: All download sources failed!")
                     print(f"{'='*60}")
@@ -201,11 +182,10 @@ class DatasetDownloader:
                     print(f"4. Re-run the benchmark")
                     raise last_error
         
-        # Extract if compressed
         if filename.endswith('.tar.gz'):
             print(f"\nExtracting {filename}...")
             self._extract_tar_gz(filepath, dataset_dir)
-            filepath.unlink()  # Remove archive after extraction
+            filepath.unlink()
         elif filename.endswith('.zip'):
             print(f"\nExtracting {filename}...")
             self._extract_zip(filepath, dataset_dir)
@@ -215,17 +195,11 @@ class DatasetDownloader:
         return dataset_dir
     
     def download_sift10m(self, force: bool = False) -> Path:
-        """
-        Download SIFT10M (BigANN 10M subset) dataset
-        
-        This is a special case because BigANN is split into multiple files
-        and we only need the first 10M vectors.
-        """
+
         dataset_info = self.DATASETS['sift10m']
         dataset_dir = self.cache_dir / 'sift10m'
         
         if dataset_dir.exists() and not force:
-            # Check if we have the necessary processed files
             if (dataset_dir / 'sift10m_base.fvecs').exists():
                 print(f"OK Dataset 'sift10m' already cached at {dataset_dir}")
                 return dataset_dir
@@ -239,7 +213,6 @@ class DatasetDownloader:
         print("WARNING: This is a large download (~12GB for base vectors).")
         print("The download will fetch the BigANN base file and extract the first 10M vectors.\n")
         
-        # Download base vectors (this is the big one ~12GB compressed)
         base_gz = dataset_dir / 'bigann_base.bvecs.gz'
         if not base_gz.exists() and not (dataset_dir / 'sift10m_base.fvecs').exists():
             print("Downloading base vectors (this will take a while)...")
@@ -252,27 +225,22 @@ class DatasetDownloader:
                 print(f"2. Place in: {dataset_dir}")
                 raise
         
-        # Download query vectors
         query_gz = dataset_dir / 'bigann_query.bvecs.gz'
         if not query_gz.exists() and not (dataset_dir / 'sift10m_query.fvecs').exists():
             print("Downloading query vectors...")
             self._download_file(dataset_info['query_url'], query_gz)
         
-        # Download groundtruth for 10M subset
         gt_file = dataset_dir / 'idx_10M.ivecs'
         if not gt_file.exists():
             print("Downloading groundtruth for 10M subset...")
             self._download_file(dataset_info['groundtruth_url'], gt_file)
         
-        # Extract and convert to fvecs format (only first 10M vectors)
         if not (dataset_dir / 'sift10m_base.fvecs').exists():
             print("\nExtracting and converting base vectors (first 10M only)...")
             print("This may take several minutes...")
             self._extract_bigann_subset(base_gz, dataset_dir / 'sift10m_base.fvecs', 
                                         n_vectors=10000000, dimension=128)
-            # Optionally remove the compressed file to save space
-            # base_gz.unlink()
-        
+
         if not (dataset_dir / 'sift10m_query.fvecs').exists():
             print("Extracting and converting query vectors...")
             self._extract_bigann_all(query_gz, dataset_dir / 'sift10m_query.fvecs', dimension=128)
@@ -286,7 +254,7 @@ class DatasetDownloader:
         """
         import gzip
         
-        vec_size = 4 + dimension  # 4 bytes for dim + dim bytes for uint8 values
+        vec_size = 4 + dimension 
         total_bytes = n_vectors * vec_size
         
         vectors = []
@@ -295,13 +263,12 @@ class DatasetDownloader:
         with gzip.open(gz_file, 'rb') as f:
             with tqdm(total=n_vectors, unit='vectors', desc='Converting') as pbar:
                 while bytes_read < total_bytes and len(vectors) < n_vectors:
-                    # Read dimension
+
                     dim_bytes = f.read(4)
                     if len(dim_bytes) < 4:
                         break
                     dim = np.frombuffer(dim_bytes, dtype=np.int32)[0]
                     
-                    # Read vector
                     vec_bytes = f.read(dim)
                     if len(vec_bytes) < dim:
                         break
@@ -311,7 +278,6 @@ class DatasetDownloader:
                     bytes_read += 4 + dim
                     pbar.update(1)
         
-        # Convert to numpy array and save as fvecs
         vectors = np.array(vectors, dtype=np.float32)
         self._write_fvecs(output_file, vectors)
         print(f"  Saved {len(vectors):,} vectors to {output_file}")
@@ -326,13 +292,12 @@ class DatasetDownloader:
         
         with gzip.open(gz_file, 'rb') as f:
             while True:
-                # Read dimension
+
                 dim_bytes = f.read(4)
                 if len(dim_bytes) < 4:
                     break
                 dim = np.frombuffer(dim_bytes, dtype=np.int32)[0]
                 
-                # Read vector
                 vec_bytes = f.read(dim)
                 if len(vec_bytes) < dim:
                     break
@@ -344,25 +309,22 @@ class DatasetDownloader:
         print(f"  Saved {len(vectors):,} vectors to {output_file}")
     
     def _write_fvecs(self, filepath: Path, vectors: np.ndarray):
-        """
-        Write vectors to .fvecs format
-        """
+
         n_vectors, dim = vectors.shape
         with open(filepath, 'wb') as f:
             for i in range(n_vectors):
-                # Write dimension as int32
+                
                 np.array([dim], dtype=np.int32).tofile(f)
-                # Write vector as float32
+                
                 vectors[i].astype(np.float32).tofile(f)
 
     def _download_file(self, url: str, filepath: Path) -> None:
         """Download file with progress bar"""
-        # Handle FTP URLs
+        
         if url.startswith('ftp://'):
             import urllib.request
             import socket
             
-            # Set socket timeout to avoid hanging
             socket.setdefaulttimeout(30)
             
             def reporthook(block_num, block_size, total_size):
@@ -379,7 +341,7 @@ class DatasetDownloader:
                     reporthook.pbar.close()
                 raise
         else:
-            # HTTP download with timeout
+            
             response = requests.get(url, stream=True, timeout=30)
             response.raise_for_status()
             
@@ -419,74 +381,51 @@ class DatasetDownloader:
         return dataset_dir if dataset_dir.exists() else None
 
 
-# Utility functions for reading dataset formats
-
 def read_fvecs(filepath: str) -> np.ndarray:
-    """
-    Read .fvecs file format (used by SIFT, GIST datasets)
-    
-    Format: [dim, vec1_val1, vec1_val2, ..., dim, vec2_val1, ...]
-    Each vector is preceded by its dimension (int32)
-    """
+
     with open(filepath, 'rb') as f:
-        # Read first dimension to get vector size
         dim = np.fromfile(f, dtype=np.int32, count=1)[0]
         f.seek(0)
         
-        # Calculate number of vectors
         file_size = os.path.getsize(filepath)
-        vec_size = 4 + dim * 4  # 4 bytes for dim + dim * 4 bytes for floats
+        vec_size = 4 + dim * 4  
         n_vecs = file_size // vec_size
         
-        # Read all data
         data = np.fromfile(f, dtype=np.int32, count=n_vecs * (dim + 1))
         data = data.reshape(n_vecs, dim + 1)
         
-        # Extract vectors (skip dimension column)
         vectors = data[:, 1:].view(np.float32)
         
     return vectors
 
 
 def read_ivecs(filepath: str) -> np.ndarray:
-    """
-    Read .ivecs file format (used for ground truth)
-    
-    Format: [k, id1, id2, ..., idk, k, ...]
-    Each row is preceded by k (number of neighbors)
-    """
+
     with open(filepath, 'rb') as f:
-        # Read first k to get number of neighbors
+
         k = np.fromfile(f, dtype=np.int32, count=1)[0]
         f.seek(0)
         
-        # Calculate number of queries
         file_size = os.path.getsize(filepath)
-        row_size = 4 + k * 4  # 4 bytes for k + k * 4 bytes for ints
+        row_size = 4 + k * 4
         n_queries = file_size // row_size
         
-        # Read all data
         data = np.fromfile(f, dtype=np.int32, count=n_queries * (k + 1))
         data = data.reshape(n_queries, k + 1)
         
-        # Extract IDs (skip k column)
         ids = data[:, 1:]
         
     return ids
 
 
 def read_bvecs(filepath: str) -> np.ndarray:
-    """
-    Read .bvecs file format (used for some datasets)
-    
-    Similar to fvecs but with uint8 values
-    """
+
     with open(filepath, 'rb') as f:
         dim = np.fromfile(f, dtype=np.int32, count=1)[0]
         f.seek(0)
         
         file_size = os.path.getsize(filepath)
-        vec_size = 4 + dim  # 4 bytes for dim + dim bytes for uint8
+        vec_size = 4 + dim 
         n_vecs = file_size // vec_size
         
         vectors = np.zeros((n_vecs, dim), dtype=np.uint8)
@@ -498,8 +437,6 @@ def read_bvecs(filepath: str) -> np.ndarray:
             
     return vectors
 
-
-# Example usage
 if __name__ == "__main__":
     import argparse
     

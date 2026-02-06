@@ -20,11 +20,9 @@ class RecallCalculator:
         
         if self.metric == 'cosine':
             similarities = cosine_similarity(queries, corpus)
-            # Higher is better for similarity
             ground_truth = np.argsort(-similarities, axis=1)[:, :k]
         elif self.metric == 'l2':
             distances = euclidean_distances(queries, corpus)
-            # Lower is better for distance
             ground_truth = np.argsort(distances, axis=1)[:, :k]
         else:
             raise ValueError(f"Unknown metric: {self.metric}")

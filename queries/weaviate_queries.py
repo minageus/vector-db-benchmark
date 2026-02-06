@@ -6,8 +6,6 @@ import numpy as np
 from typing import List, Dict
 
 class WeaviateQueryExecutor:
-    """Execute queries on Weaviate and measure performance"""
-    
     def __init__(self, client, collection_name: str):
         self.client = client
         self.collection_name = collection_name
@@ -20,17 +18,14 @@ class WeaviateQueryExecutor:
         metric_type: str = 'IP',
         filters: List[Dict] = None
     ) -> Dict:
-        """Execute search queries and return metrics"""
         latencies = []
         results_list = []
         
         for i, query_vec in enumerate(query_vectors):
             where_filter = None
             if filters and i < len(filters):
-                # Build filter
                 filter_dict = filters[i]
                 if 'category' in filter_dict:
-                    # Use v4 Filter syntax
                     where_filter = Filter.by_property("category").equal(filter_dict['category']['$in'][0])
             
             start_time = time.time()
