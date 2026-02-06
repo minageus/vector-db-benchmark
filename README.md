@@ -23,31 +23,37 @@ python run_paper_benchmark.py --dataset gist1m --M 16 --ef 200
 
 Key options: `--dataset`, `--subset N`, `--runs N`, `--queries N`, `--M N`, `--ef-construction N`, `--sweep-ef`, `--skip-concurrent`.
 
-## Datasets
-
-| Dataset | Vectors | Dimensions | Metric |
-|---------|---------|------------|--------|
-| sift1m | 1M | 128 | L2 |
-| gist1m | 1M | 960 | L2 |
-| glove-100 | 1.2M | 100 | Cosine |
-| nytimes-256 | 290K | 256 | Cosine |
-| fashion-mnist-784 | 60K | 784 | L2 |
-
-Datasets download automatically on first use.
-
 ## Project Structure
 
 ```
-├── run_paper_benchmark.py     # Main benchmark script
-├── generate_paper_charts.py   # Chart generation for paper
-├── streamlit_app.py           # Interactive results dashboard
-├── docker-compose.yml         # Database containers
-├── data/                      # Data loaders
-├── queries/                   # Query implementations
-├── benchmarks/                # Benchmark orchestration
-├── utils/                     # Monitoring and analysis
-└── results/                   # Generated reports and charts
+├── run_paper_benchmark.py     
+├── generate_paper_charts.py   
+├── streamlit_app.py           
+├── docker-compose.yml         
+├── data/                      
+├── queries/                   
+├── benchmarks/                
+├── utils/                     
+└── results/                   
 ```
+
+## Datasets
+
+All datasets sourced from [ANN-Benchmarks](http://ann-benchmarks.com/). The following were benchmarked:
+
+| Dataset | Vectors | Dimensions | Metric | Size |
+|---------|---------|------------|--------|------|
+| SIFT1M | 1,000,000 | 128 | L2 | ~161 MB |
+| GIST1M | 1,000,000 | 960 | L2 | ~3.6 GB |
+| GloVe-25 | 1,183,514 | 25 | Angular | ~120 MB |
+| GloVe-100 | 1,183,514 | 100 | Angular | ~822 MB |
+| GloVe-200 | 1,183,514 | 200 | Angular | ~950 MB |
+| GloVe-300 | 1,183,514 | 300 | Angular | — |
+| Fashion-MNIST-784 | 60,000 | 784 | L2 | ~217 MB |
+| NYTimes-256 | 290,000 | 256 | Angular | ~301 MB |
+| Deep-Image-96 | 10,000,000 | 96 | Angular | ~3.8 GB |
+
+Deep-Image-96 was run on 2M and 5M vector subsets. All other datasets were run at full size.
 
 ## License
 
